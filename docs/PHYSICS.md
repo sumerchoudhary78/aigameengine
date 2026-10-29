@@ -59,7 +59,7 @@ allocator, and revision untouched. Scene changes are rejected while that host's 
 running; finish or forfeit it first. Player hosts bind their saved scene at launch and
 cannot author, load files, restore snapshots, verify arbitrary replays, or choose output
 paths. This is local capability separation; it is not remote authentication. Observations
-are fully observable and omit authoring labels. Player replay exports omit labels too.
+are fully observable and omit authoring labels and ID-allocator metadata. Player replay exports omit labels too.
 
 Recordings may grow beyond the 1 MiB request limit. Export them to an author-chosen file
 and use `replay.verify_file` with `{ "path": "episode.physics.replay.json" }`; file reads

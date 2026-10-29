@@ -1,7 +1,7 @@
 //! One authoritative execution path: validate, apply one input, advance one fixed tick.
 use crate::{
     hash,
-    scene::{PhysicsScene, PhysicsSceneDocument, Vec2},
+    scene::{PhysicsScene, Vec2},
     world::{RawState, World},
 };
 use agentforge_core::{hash::StateHash, ids::EntityId};
@@ -64,6 +64,12 @@ pub struct Step {
     pub action: Action,
     pub hash: StateHash,
 }
+/// Visible initial scene data. Omits the authoring ID allocator and labels.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct VisibleScene {
+    pub settings: crate::scene::PhysicsSettings,
+    pub bodies: Vec<crate::scene::Body>,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Observation {
     pub tick: u32,
@@ -71,7 +77,7 @@ pub struct Observation {
     pub bodies: Vec<BodyState>,
     pub settings: crate::scene::PhysicsSettings,
     /// Fully observable scene; authoring labels removed.
-    pub scene: PhysicsSceneDocument,
+    pub scene: VisibleScene,
     pub impulses_used: u32,
     pub can_impulse: bool,
     pub state_hash: StateHash,
@@ -169,10 +175,18 @@ impl Episode {
                 .is_some_and(|c| c.max_impulses == 0 || self.impulses_used < c.max_impulses)
     }
     pub fn observe(&self) -> Observation {
-        let mut scene = self.scene.to_document();
-        for b in &mut scene.bodies {
-            b.label = None;
-        }
+        let scene = VisibleScene {
+            settings: *self.scene.settings(),
+            bodies: self
+                .scene
+                .bodies()
+                .cloned()
+                .map(|mut body| {
+                    body.label = None;
+                    body
+                })
+                .collect(),
+        };
         Observation {
             tick: self.tick,
             outcome: self.outcome,

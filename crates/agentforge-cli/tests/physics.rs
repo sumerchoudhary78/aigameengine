@@ -157,6 +157,10 @@ fn physics_player_cannot_author_or_read_authoring_labels() {
         assert_eq!(response["error"]["code"], "permission_denied", "{op}");
     }
     let start = call(&mut player, "episode.start", json!({}));
+    assert!(
+        start["observation"]["scene"].get("next_body_id").is_none(),
+        "allocator metadata must stay out of player observations"
+    );
     let labels = start["observation"]["scene"]["bodies"]
         .as_array()
         .expect("bodies");

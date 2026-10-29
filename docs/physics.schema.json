@@ -3198,7 +3198,7 @@
               },
               "scene": {
                 "description": "Fully observable scene; authoring labels removed.",
-                "$ref": "#/$defs/PhysicsSceneDocument"
+                "$ref": "#/$defs/VisibleScene"
               },
               "impulses_used": {
                 "type": "integer",
@@ -3454,32 +3454,22 @@
               "max_impulse"
             ]
           },
-          "PhysicsSceneDocument": {
-            "description": "Serialized form of a [`PhysicsScene`].",
+          "VisibleScene": {
+            "description": "Visible initial scene data. Omits the authoring ID allocator and labels.",
             "type": "object",
             "properties": {
               "settings": {
-                "description": "World settings.",
                 "$ref": "#/$defs/PhysicsSettings"
               },
-              "next_body_id": {
-                "description": "Id the next created body receives.",
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
               "bodies": {
-                "description": "Bodies in ascending id order.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/Body"
                 }
               }
             },
-            "additionalProperties": false,
             "required": [
               "settings",
-              "next_body_id",
               "bodies"
             ]
           },
@@ -3762,7 +3752,6 @@
                 "max_impulses": 1
               }
             },
-            "next_body_id": 3,
             "bodies": [
               {
                 "id": 1,
@@ -3879,7 +3868,7 @@
               },
               "scene": {
                 "description": "Fully observable scene; authoring labels removed.",
-                "$ref": "#/$defs/PhysicsSceneDocument"
+                "$ref": "#/$defs/VisibleScene"
               },
               "impulses_used": {
                 "type": "integer",
@@ -4135,32 +4124,22 @@
               "max_impulse"
             ]
           },
-          "PhysicsSceneDocument": {
-            "description": "Serialized form of a [`PhysicsScene`].",
+          "VisibleScene": {
+            "description": "Visible initial scene data. Omits the authoring ID allocator and labels.",
             "type": "object",
             "properties": {
               "settings": {
-                "description": "World settings.",
                 "$ref": "#/$defs/PhysicsSettings"
               },
-              "next_body_id": {
-                "description": "Id the next created body receives.",
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
               "bodies": {
-                "description": "Bodies in ascending id order.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/Body"
                 }
               }
             },
-            "additionalProperties": false,
             "required": [
               "settings",
-              "next_body_id",
               "bodies"
             ]
           },
@@ -4443,7 +4422,6 @@
                 "max_impulses": 1
               }
             },
-            "next_body_id": 3,
             "bodies": [
               {
                 "id": 1,
@@ -4560,7 +4538,7 @@
               },
               "scene": {
                 "description": "Fully observable scene; authoring labels removed.",
-                "$ref": "#/$defs/PhysicsSceneDocument"
+                "$ref": "#/$defs/VisibleScene"
               },
               "impulses_used": {
                 "type": "integer",
@@ -4816,32 +4794,22 @@
               "max_impulse"
             ]
           },
-          "PhysicsSceneDocument": {
-            "description": "Serialized form of a [`PhysicsScene`].",
+          "VisibleScene": {
+            "description": "Visible initial scene data. Omits the authoring ID allocator and labels.",
             "type": "object",
             "properties": {
               "settings": {
-                "description": "World settings.",
                 "$ref": "#/$defs/PhysicsSettings"
               },
-              "next_body_id": {
-                "description": "Id the next created body receives.",
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
               "bodies": {
-                "description": "Bodies in ascending id order.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/Body"
                 }
               }
             },
-            "additionalProperties": false,
             "required": [
               "settings",
-              "next_body_id",
               "bodies"
             ]
           },
@@ -5124,7 +5092,6 @@
                 "max_impulses": 1
               }
             },
-            "next_body_id": 3,
             "bodies": [
               {
                 "id": 1,
@@ -5515,7 +5482,7 @@
               },
               "scene": {
                 "description": "Fully observable scene; authoring labels removed.",
-                "$ref": "#/$defs/PhysicsSceneDocument"
+                "$ref": "#/$defs/VisibleScene"
               },
               "impulses_used": {
                 "type": "integer",
@@ -5733,32 +5700,22 @@
               "max_impulse"
             ]
           },
-          "PhysicsSceneDocument": {
-            "description": "Serialized form of a [`PhysicsScene`].",
+          "VisibleScene": {
+            "description": "Visible initial scene data. Omits the authoring ID allocator and labels.",
             "type": "object",
             "properties": {
               "settings": {
-                "description": "World settings.",
                 "$ref": "#/$defs/PhysicsSettings"
               },
-              "next_body_id": {
-                "description": "Id the next created body receives.",
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
               "bodies": {
-                "description": "Bodies in ascending id order.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/Body"
                 }
               }
             },
-            "additionalProperties": false,
             "required": [
               "settings",
-              "next_body_id",
               "bodies"
             ]
           },
@@ -6046,7 +6003,6 @@
                 "max_impulses": 1
               }
             },
-            "next_body_id": 3,
             "bodies": [
               {
                 "id": 1,
