@@ -6,11 +6,13 @@ projects entirely through a versioned **JSON Lines protocol** on stdin/stdout. N
 editor, GUI, GPU, account, credentials or model API is involved, and no language model runs
 inside the simulation loop: the engine executes the rules itself.
 
-> **Status: milestone 1.** A small, complete vertical slice: a turn-based 2D integer-grid
-> dungeon (players, walls, colored keys, matching doors, exits). It is a foundation, not a
-> general-purpose engine: there is no physics, real-time simulation, rendering pipeline or
-> scripting language yet (see [Roadmap](#roadmap)). "AgentForge" is a temporary internal
-> working name, not a claim of trademark availability.
+> **Status: two vertical slices.** A turn-based 2D integer-grid dungeon (players, walls,
+> colored keys, matching doors, exits) and a headless fixed-timestep 2D rigid-body mode
+> (balls, boxes, materials, impulses, sensor goals). Both are driven through the same
+> versioned protocol, by JSON Lines clients and by MCP tools. They are foundations, not a
+> general-purpose engine: there is no rendering pipeline, scripting language or live viewer
+> yet (see [Roadmap](#roadmap)). "AgentForge" is a temporary internal working name, not a
+> claim of trademark availability.
 
 ## What works
 
@@ -39,6 +41,10 @@ inside the simulation loop: the engine executes the rules itself.
 - **Self-description**: `discover` returns the game model, conventions, limits, every
   callable operation with an example, and JSON Schemas generated from the Rust types.
 - **Visual inspection**: `scene.render` writes an SVG with entity ids labelled (no GUI needed).
+- **MCP adapter**: the same session, operations and schemas are exposed as Model Context
+  Protocol tools over stdio, so an MCP client keeps one long-lived session without holding a
+  pipe itself. Tool names are the operation names with dots replaced by underscores. Each
+  result reports the session revision; engine errors keep their code, details and hint.
 
 ## Quick start
 
@@ -78,6 +84,9 @@ engine's diagnosis reports as verified.
 ```sh
 agentforge serve --role author                       # trusted authoring session
 agentforge serve --role player --project p.agentforge.json --scene NAME --replay-dir DIR
+
+agentforge mcp --role author                         # same session as MCP tools
+agentforge physics mcp --role author
 ```
 
 Write one JSON request per line; read one JSON response per line. Start with `discover`:
@@ -91,7 +100,8 @@ Write one JSON request per line; read one JSON response per line. Start with `di
 ```
 
 A whole session can be piped: `agentforge serve --role author < session.jsonl`. See
-[docs/PROTOCOL.md](docs/PROTOCOL.md) for conventions (revisions, retries, errors, roles) and
+[docs/PROTOCOL.md](docs/PROTOCOL.md) for conventions (revisions, retries, errors, roles),
+[docs/MCP.md](docs/MCP.md) for the MCP adapter, and
 [docs/protocol/operations.md](docs/protocol/operations.md) for every operation with an
 example. Machine-readable schemas: [docs/protocol/protocol.schema.json](docs/protocol/protocol.schema.json).
 
@@ -101,7 +111,8 @@ example. Machine-readable schemas: [docs/protocol/protocol.schema.json](docs/pro
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                               # unit, protocol-boundary and process-level tests
-cargo run -p agentforge-cli -- schema --check        # generated docs match the code
+cargo run -p agentforge-cli -- schema --check        # generated grid docs match the code
+cargo run -p agentforge-cli -- physics schema --check # generated physics docs match the code
 ```
 
 ## Benchmark
@@ -129,8 +140,8 @@ observation after every move should pass `"include_observation": false`.
 | Path | Contents |
 |---|---|
 | `crates/agentforge-core` | Pure deterministic simulation: scenes, rules, episodes, analysis, hashing, replays, SVG. No I/O. |
-| `crates/agentforge-host` | Protocol types and catalog, generated schemas, capability-scoped sessions, revisions, snapshots, atomic storage, JSON Lines server. |
-| `crates/agentforge-cli` | The `agentforge` binary: grid and physics protocol servers, demos, replay verification, schemas and benchmarks. |
+| `crates/agentforge-host` | Protocol types and catalog, generated schemas, capability-scoped sessions, revisions, snapshots, atomic storage, JSON Lines and MCP transports. |
+| `crates/agentforge-cli` | The `agentforge` binary: grid and physics protocol and MCP servers, demos, replay verification, schemas and benchmarks. |
 | `crates/agentforge-physics` | Rapier fixed-timestep rigid-body scenes, impulses, contacts, sensor goals and replay checkpoints. No I/O. |
 | `crates/agentforge-demo` | Scripted protocol clients (builder, player). Depends on no engine crate. |
 | `fixtures/` | Two grid fixtures plus launch and gravity-drop physics scenes. |
@@ -146,9 +157,10 @@ observation after every move should pass `"include_observation": false`.
   controls/sensor goals are declarative data; arbitrary new mechanics require engine code.
 - **Local capability separation, not authentication.** Roles are fixed per process by
   whoever launches it. There is no network transport and no remote auth.
-- **Interactive use needs a held-open pipe.** Coding agents whose shell runs one command at
-  a time must either pipe whole scripts or keep a process open themselves. An MCP adapter
-  would remove this friction; it is not built yet.
+- **MCP revision and transport scope.** The MCP adapter implements the legacy (initialize
+  handshake) 2025-06-18 revision over local stdio. The modern per-request-metadata revision
+  (2026-07-28), remote transports and authentication are not implemented. An MCP client keeps
+  the session alive across tool calls; a plain shell still needs a held-open pipe.
 - **Reproducibility scope.** Replays verify against the same replay format and hash-encoding
   version, and are tested with this engine version on macOS (arm64). Other cross-version
   or cross-platform identity is not claimed.
@@ -162,9 +174,9 @@ observation after every move should pass `"include_observation": false`.
 
 These are not implemented; the [architecture notes](docs/ARCHITECTURE.md#deferred-work)
 explain where each would fit:
-an MCP server adapter over the same dispatcher; a richer declarative rule format (informed by VGDL, PuzzleScript and Griddly's
-GDY); persisted snapshots and session-level replays that include edits; a live viewer;
-hidden-information games.
+the modern MCP revision and remote transports; a richer declarative rule format (informed by
+VGDL, PuzzleScript and Griddly's GDY); persisted snapshots and session-level replays that
+include edits; a live viewer; hidden-information games.
 
 ## Rigid-body physics extension
 
@@ -176,11 +188,13 @@ sessions, atomic scene edits, checkpoints, per-tick replay verification and SVG 
 cargo run --release -p agentforge-cli -- physics demo --out out/physics
 cargo run --release -p agentforge-cli -- physics replay verify out/physics/replay.json
 cargo run --release -p agentforge-cli -- physics bench --worlds 20 --ticks 600
+cargo run --release -p agentforge-cli -- physics mcp --role author
 ```
 
 See [physics commands and determinism scope](docs/PHYSICS.md) and the generated
 [schemas and operation examples](docs/physics.schema.json). Physics projects use a separate
-format; the original dungeon demo and commands continue to work.
+format; the original dungeon demo and commands continue to work. The physics engine is also
+available as MCP tools; see [docs/MCP.md](docs/MCP.md).
 
 ## License
 

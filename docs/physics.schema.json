@@ -700,6 +700,7 @@
   "operations": [
     {
       "name": "discover",
+      "summary": "Describe the physics model, conventions, limits, operations and schemas this session may call.",
       "roles": [
         "author",
         "player"
@@ -778,24 +779,40 @@
         ],
         "$defs": {
           "OperationInfo": {
+            "description": "One physics operation as published by `discover` and the generated schema.",
             "type": "object",
             "properties": {
               "name": {
+                "description": "Wire name, for example `scene.set`.",
+                "type": "string"
+              },
+              "summary": {
+                "description": "One-line description.",
                 "type": "string"
               },
               "roles": {
+                "description": "Roles allowed to call it.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/Role"
                 }
               },
-              "input_schema": true,
-              "output_schema": true,
-              "example_arguments": true,
-              "example_result": true
+              "input_schema": {
+                "description": "Standalone JSON Schema of the arguments."
+              },
+              "output_schema": {
+                "description": "Standalone JSON Schema of the result."
+              },
+              "example_arguments": {
+                "description": "An example arguments object."
+              },
+              "example_result": {
+                "description": "The example's expected result."
+              }
             },
             "required": [
               "name",
+              "summary",
               "roles",
               "input_schema",
               "output_schema",
@@ -846,6 +863,7 @@
     },
     {
       "name": "session.status",
+      "summary": "Report this session's role, revision, open scene, active episode and snapshots.",
       "roles": [
         "author",
         "player"
@@ -964,6 +982,7 @@
     },
     {
       "name": "scene.set",
+      "summary": "Replace the open scene with a validated document; the change is in memory until saved.",
       "roles": [
         "author"
       ],
@@ -1448,6 +1467,7 @@
     },
     {
       "name": "scene.get",
+      "summary": "Return the open scene document.",
       "roles": [
         "author"
       ],
@@ -1913,6 +1933,7 @@
     },
     {
       "name": "scene.apply_batch",
+      "summary": "Apply settings and body edits atomically: all succeed, or nothing changes.",
       "roles": [
         "author"
       ],
@@ -2975,6 +2996,7 @@
     },
     {
       "name": "scene.validate",
+      "summary": "Check data and reference invariants and whether control and objective are configured.",
       "roles": [
         "author"
       ],
@@ -3017,6 +3039,7 @@
     },
     {
       "name": "scene.save",
+      "summary": "Validate the scene and write it atomically as a versioned physics project.",
       "roles": [
         "author"
       ],
@@ -3070,6 +3093,7 @@
     },
     {
       "name": "scene.load",
+      "summary": "Load and validate a versioned physics project without changing the session on failure.",
       "roles": [
         "author"
       ],
@@ -3118,6 +3142,7 @@
     },
     {
       "name": "scene.svg",
+      "summary": "Render the initial body poses and goal sensor as SVG.",
       "roles": [
         "author"
       ],
@@ -3147,6 +3172,7 @@
     },
     {
       "name": "episode.start",
+      "summary": "Start a fresh episode on the open scene.",
       "roles": [
         "author",
         "player"
@@ -3817,6 +3843,7 @@
     },
     {
       "name": "episode.reset",
+      "summary": "Restart the active episode from its initial scene.",
       "roles": [
         "author",
         "player"
@@ -4487,6 +4514,7 @@
     },
     {
       "name": "episode.observe",
+      "summary": "Return the current observation: body poses, velocities, contacts and outcome.",
       "roles": [
         "author",
         "player"
@@ -5157,6 +5185,7 @@
     },
     {
       "name": "episode.act",
+      "summary": "Apply one action and advance exactly one fixed timestep.",
       "roles": [
         "author",
         "player"
@@ -6068,6 +6097,7 @@
     },
     {
       "name": "episode.events",
+      "summary": "Return recent contact, overlap and outcome events.",
       "roles": [
         "author",
         "player"
@@ -6275,6 +6305,7 @@
     },
     {
       "name": "replay.export",
+      "summary": "Export the active episode recording inline and optionally to an author-chosen path.",
       "roles": [
         "author",
         "player"
@@ -6913,6 +6944,7 @@
     },
     {
       "name": "replay.verify",
+      "summary": "Re-execute an inline recording and compare every recorded state hash.",
       "roles": [
         "author"
       ],
@@ -7571,6 +7603,7 @@
     },
     {
       "name": "replay.verify_file",
+      "summary": "Re-execute a recording from a bounded file and compare every recorded state hash.",
       "roles": [
         "author"
       ],
@@ -7645,6 +7678,7 @@
     },
     {
       "name": "snapshot.capture",
+      "summary": "Capture the scene, save path and episode recording as an in-memory checkpoint.",
       "roles": [
         "author"
       ],
@@ -7683,6 +7717,7 @@
     },
     {
       "name": "snapshot.restore",
+      "summary": "Rebuild a checkpoint by replaying its inputs and assign a fresh episode id.",
       "roles": [
         "author"
       ],

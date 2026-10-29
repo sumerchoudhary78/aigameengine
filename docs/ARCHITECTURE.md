@@ -1,6 +1,6 @@
 # Architecture
 
-AgentForge milestone 1 is a deterministic simulation kernel with a machine-first protocol.
+AgentForge is a deterministic simulation kernel with a machine-first protocol.
 This document explains who owns state, how it changes, what "deterministic" means here,
 how permissions work, how schemas stay in sync, and what was deliberately deferred.
 
@@ -19,7 +19,8 @@ agentforge-cli    `agentforge` binary               (+ clap, tracing-subscriber)
 - **core** knows nothing about transports, sessions, files or model providers. Every public
   function is a pure function of its inputs.
 - **host** turns protocol requests into core calls. It owns session state, enforces roles and
-  revisions, and reads and writes files.
+  revisions, and reads and writes files. It also carries the two transports: bounded JSON
+  Lines and MCP over stdio.
 - **cli** wires a host to stdin/stdout and provides the demo, replay verification, schema
   export and benchmarks.
 - **demo** clients depend on **no** engine crate. They spawn `agentforge serve` processes and
@@ -70,6 +71,29 @@ author process  --project.save-->  project file  --(launcher)-->  player process
 This is **local capability separation between processes**, not authentication. Anyone who
 can launch the binary can launch an author session. Remote access would need a transport
 with real authentication, which is out of scope.
+
+## MCP transport
+
+`agentforge mcp` (and `agentforge physics mcp`) serve the same session through the Model
+Context Protocol, so an MCP client can keep one session alive without holding a pipe. The
+adapter is a transport, not a second implementation:
+
+- `tools/list` is generated from `OpId` (grid) or the physics operation catalog, filtered to
+  the launcher-fixed role. Descriptions and argument schemas come from the same catalog as
+  `discover`, so they cannot drift.
+- `tools/call` rebuilds a protocol envelope and enters `handle_line`, the single dispatch
+  path. Revision checks, atomic batches, stale-episode guards and error bodies are unchanged.
+- Tool names replace dots with underscores (`entity.create` becomes `entity_create`) to
+  satisfy MCP client name rules; the mapping is one-way.
+- Successful results carry `{revision, result}`; engine failures are `isError` results with
+  `{revision, error}`. JSON-RPC errors are reserved for transport problems: malformed
+  messages, unknown methods, unknown tools and non-object arguments.
+- Only the legacy 2025-06-18 revision is implemented. A modern client that probes
+  `server/discover` gets an unknown-method error and falls back to `initialize`; a
+  modern-only client cannot connect.
+
+The server is synchronous with one request in flight, like the JSON Lines loop. It adds no
+simulation state and no authorization: the role still comes from the launcher.
 
 ## Revisions, concurrency and retries
 
@@ -260,7 +284,7 @@ two changes are needed. The report never guesses a culprit.
   editor's world.
 - **Colored, non-consumed keys; one key per color.** They keep solvability exact and the
   canonical state small.
-- **No randomness.** Nothing in milestone 1 needs it. A future seeded RNG would be part of
+- **No randomness.** Nothing in the grid engine needs it. A future seeded RNG would be part of
   the snapshot and hash encoding (with a version bump).
 - **Rejected moves do not consume ticks.** `legal_actions` is then exactly the set of
   accepted actions, and an illegal action is a no-op with an explanation.
@@ -279,8 +303,10 @@ hash domains are distinct, preserving existing grid replay hashes. See
 
 These are extension points only; none is implemented.
 
-- **MCP adapter.** Expose the same `OpId` dispatcher as MCP tools over stdio, so interactive
-  agents can call it without holding a pipe themselves.
+- **Modern MCP.** Support the 2026-07-28 per-request-metadata revision (including
+  `server/discover`) alongside the legacy `initialize` handshake.
+- **Remote transports.** A network transport with real authentication. Today the boundary is
+  local process separation.
 - **Richer rules.** A bounded declarative rule format for new mechanics (enemies, switches,
   timers), informed by VGDL, PuzzleScript and Griddly GDY rather than arbitrary code.
 - **Session-level replays** that include authoring edits; persisted snapshots.
