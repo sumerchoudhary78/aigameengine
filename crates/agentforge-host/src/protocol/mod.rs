@@ -160,7 +160,7 @@ error_codes! {
     DuplicateKeyColor => "duplicate_key_color": "A scene holds at most one key per color.",
     InvalidLabel => "invalid_label": "Labels are 1-64 characters without control characters.",
     InvalidRules => "invalid_rules": "A rule parameter is out of range.",
-    SceneNotPlayable => "scene_not_playable": "The scene lacks a player or an exit, so no episode can start.",
+    SceneNotPlayable => "scene_not_playable": "The scene lacks the required player/control or objective entities, so no episode can start.",
     NoActiveEpisode => "no_active_episode": "The operation needs a started episode.",
     EpisodeFinished => "episode_finished": "The episode already ended; start or reset one.",
     StaleEpisode => "stale_episode": "expected_episode_id is not the active episode; the action was not applied.",

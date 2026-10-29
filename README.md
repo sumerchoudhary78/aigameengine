@@ -130,19 +130,20 @@ observation after every move should pass `"include_observation": false`.
 |---|---|
 | `crates/agentforge-core` | Pure deterministic simulation: scenes, rules, episodes, analysis, hashing, replays, SVG. No I/O. |
 | `crates/agentforge-host` | Protocol types and catalog, generated schemas, capability-scoped sessions, revisions, snapshots, atomic storage, JSON Lines server. |
-| `crates/agentforge-cli` | The `agentforge` binary: `serve`, `demo`, `replay verify`, `schema`, `bench`. |
+| `crates/agentforge-cli` | The `agentforge` binary: grid and physics protocol servers, demos, replay verification, schemas and benchmarks. |
+| `crates/agentforge-physics` | Rapier fixed-timestep rigid-body scenes, impulses, contacts, sensor goals and replay checkpoints. No I/O. |
 | `crates/agentforge-demo` | Scripted protocol clients (builder, player). Depends on no engine crate. |
-| `fixtures/` | Two scene fixtures (different layouts and rule parameters), created through the protocol. |
+| `fixtures/` | Two grid fixtures plus launch and gravity-drop physics scenes. |
 | `docs/` | Architecture notes, protocol guide, generated operation reference and JSON Schema. |
 
 ## Limitations
 
 - **Fully observable only.** Observations contain the whole board; there is no hidden
   information and no hidden-information protection.
-- **Turn-based integer grid only.** No physics, continuous space, real-time ticking,
-  autonomous entities or randomness.
-- **Fixed rule vocabulary.** Five entity kinds and two rule parameters; agents can build
-  levels and tune rules, not invent new mechanics yet.
+- **Explicit ticks.** Grid play advances one turn per action; physics advances one fixed
+  timestep per action. No wall-clock scheduler, autonomous agents or randomness.
+- **Bounded rule vocabulary.** Grid entities/rules and physics bodies/materials/impulse
+  controls/sensor goals are declarative data; arbitrary new mechanics require engine code.
 - **Local capability separation, not authentication.** Roles are fixed per process by
   whoever launches it. There is no network transport and no remote auth.
 - **Interactive use needs a held-open pipe.** Coding agents whose shell runs one command at
@@ -161,11 +162,25 @@ observation after every move should pass `"include_observation": false`.
 
 These are not implemented; the [architecture notes](docs/ARCHITECTURE.md#deferred-work)
 explain where each would fit:
-an MCP server adapter over the same dispatcher; deterministic physics as a second world kind
-(via [Rapier](https://rapier.rs/)'s cross-platform determinism mode rather than custom
-physics); a richer declarative rule format (informed by VGDL, PuzzleScript and Griddly's
+an MCP server adapter over the same dispatcher; a richer declarative rule format (informed by VGDL, PuzzleScript and Griddly's
 GDY); persisted snapshots and session-level replays that include edits; a live viewer;
 hidden-information games.
+
+## Rigid-body physics extension
+
+A second headless mode adds Rapier ball/box dynamics, gravity, solid contacts, material
+properties, impulse controls and sensor goals. It has versioned JSON Lines author/player
+sessions, atomic scene edits, checkpoints, per-tick replay verification and SVG previews.
+
+```sh
+cargo run --release -p agentforge-cli -- physics demo --out out/physics
+cargo run --release -p agentforge-cli -- physics replay verify out/physics/replay.json
+cargo run --release -p agentforge-cli -- physics bench --worlds 20 --ticks 600
+```
+
+See [physics commands and determinism scope](docs/PHYSICS.md) and the generated
+[schemas and operation examples](docs/physics.schema.json). Physics projects use a separate
+format; the original dungeon demo and commands continue to work.
 
 ## License
 

@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 agentforge-core.workspace = true
+agentforge-physics.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

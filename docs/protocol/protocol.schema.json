@@ -728,7 +728,7 @@
     },
     {
       "code": "scene_not_playable",
-      "meaning": "The scene lacks a player or an exit, so no episode can start."
+      "meaning": "The scene lacks the required player/control or objective entities, so no episode can start."
     },
     {
       "code": "no_active_episode",
@@ -1024,7 +1024,7 @@
         {
           "type": "string",
           "const": "scene_not_playable",
-          "description": "The scene lacks a player or an exit, so no episode can start."
+          "description": "The scene lacks the required player/control or objective entities, so no episode can start."
         },
         {
           "type": "string",

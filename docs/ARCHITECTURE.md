@@ -265,15 +265,22 @@ two changes are needed. The report never guesses a culprit.
 - **Rejected moves do not consume ticks.** `legal_actions` is then exactly the set of
   accepted actions, and an illegal action is a no-op with an explanation.
 
+## Physics extension
+
+The separate `agentforge-physics` crate and `agentforge physics` launcher now provide
+Rapier rigid-body scenes with the same envelope, role, revision and retry conventions.
+The bounded JSON Lines server accepts either session implementation through its `Session`
+trait. Physics snapshots rebuild complete solver state from the initial scene and accepted
+inputs; grid snapshots still copy their integer simulation state directly. The formats and
+hash domains are distinct, preserving existing grid replay hashes. See
+[PHYSICS.md](PHYSICS.md) for commands, canonical encoding and tested determinism scope.
+
 ## Deferred work
 
 These are extension points only; none is implemented.
 
 - **MCP adapter.** Expose the same `OpId` dispatcher as MCP tools over stdio, so interactive
   agents can call it without holding a pipe themselves.
-- **Physics worlds.** A second world kind backed by Rapier with its determinism feature,
-  behind the same session, revision, snapshot and replay contract. Hash encoding v2 would
-  cover its state.
 - **Richer rules.** A bounded declarative rule format for new mechanics (enemies, switches,
   timers), informed by VGDL, PuzzleScript and Griddly GDY rather than arbitrary code.
 - **Session-level replays** that include authoring edits; persisted snapshots.

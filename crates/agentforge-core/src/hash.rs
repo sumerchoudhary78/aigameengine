@@ -133,39 +133,53 @@ impl JsonSchema for StateHash {
     }
 }
 
-/// Streams canonical primitives into a SHA-256 hasher.
-struct Encoder(Sha256);
+/// Streams canonical primitives into SHA-256: fixed-width little-endian integers, IEEE-754
+/// bit patterns for floats, and length-prefixed UTF-8 strings. Shared by every world kind so
+/// all state hashes follow the same primitive rules.
+pub struct CanonicalEncoder(Sha256);
 
-impl Encoder {
-    fn new(domain: &str) -> Self {
+impl CanonicalEncoder {
+    /// Starts an encoding with a domain-separation string.
+    pub fn new(domain: &str) -> Self {
         let mut encoder = Self(Sha256::new());
         encoder.str(domain);
         encoder
     }
 
-    fn u8(&mut self, value: u8) {
+    /// Appends one byte.
+    pub fn u8(&mut self, value: u8) {
         self.0.update([value]);
     }
 
-    fn u32(&mut self, value: u32) {
+    /// Appends a little-endian `u32`.
+    pub fn u32(&mut self, value: u32) {
         self.0.update(value.to_le_bytes());
     }
 
-    fn i32(&mut self, value: i32) {
+    /// Appends a little-endian `i32`.
+    pub fn i32(&mut self, value: i32) {
         self.0.update(value.to_le_bytes());
     }
 
-    fn str(&mut self, value: &str) {
-        // Domain strings are short constants, far below u32::MAX bytes.
+    /// Appends the IEEE-754 bit pattern of `value` as a little-endian `u64`.
+    pub fn f64(&mut self, value: f64) {
+        self.0.update(value.to_bits().to_le_bytes());
+    }
+
+    /// Appends a `u32` byte length followed by the UTF-8 bytes.
+    pub fn str(&mut self, value: &str) {
+        // Strings hashed here are short domain constants, far below u32::MAX bytes.
         self.u32(value.len() as u32);
         self.0.update(value.as_bytes());
     }
 
-    fn bytes(&mut self, value: &[u8]) {
+    /// Appends raw bytes (for nested digests).
+    pub fn bytes(&mut self, value: &[u8]) {
         self.0.update(value);
     }
 
-    fn finish(self) -> StateHash {
+    /// Completes the digest.
+    pub fn finish(self) -> StateHash {
         StateHash(self.0.finalize().into())
     }
 }
@@ -212,7 +226,7 @@ const fn outcome_code(outcome: Outcome) -> (u8, u32) {
 /// ascending id order: `u32 id`, `u8 kind`, `u8 color` (0 = none, else 1 + color index),
 /// `i32 x`, `i32 y`.
 pub fn scene_digest(scene: &Scene) -> StateHash {
-    let mut encoder = Encoder::new(SCENE_DOMAIN);
+    let mut encoder = CanonicalEncoder::new(SCENE_DOMAIN);
     let size = scene.size();
     let rules = scene.rules();
     encoder.u32(size.width);
@@ -242,7 +256,7 @@ pub fn scene_digest(scene: &Scene) -> StateHash {
 /// Because each key color appears at most once per scene, the inventory also determines
 /// which key entities have been collected, so no separate collected-set is encoded.
 pub fn state_hash(scene_digest: &StateHash, state: &EpisodeState) -> StateHash {
-    let mut encoder = Encoder::new(STATE_DOMAIN);
+    let mut encoder = CanonicalEncoder::new(STATE_DOMAIN);
     encoder.bytes(scene_digest.as_bytes());
     encoder.u32(state.tick);
     encoder.i32(state.player.x);
@@ -266,7 +280,7 @@ pub fn recording_fingerprint(
     steps: &[(u32, Action, StateHash)],
     final_hash: &StateHash,
 ) -> StateHash {
-    let mut encoder = Encoder::new(RECORDING_DOMAIN);
+    let mut encoder = CanonicalEncoder::new(RECORDING_DOMAIN);
     encoder.bytes(scene_digest.as_bytes());
     encoder.bytes(initial_hash.as_bytes());
     // Steps are bounded by max_ticks (at most 10_000).

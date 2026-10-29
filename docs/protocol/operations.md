@@ -216,7 +216,7 @@ Every request is one JSON line. Full argument and result schemas: `protocol.sche
 | `duplicate_key_color` | A scene holds at most one key per color. |
 | `invalid_label` | Labels are 1-64 characters without control characters. |
 | `invalid_rules` | A rule parameter is out of range. |
-| `scene_not_playable` | The scene lacks a player or an exit, so no episode can start. |
+| `scene_not_playable` | The scene lacks the required player/control or objective entities, so no episode can start. |
 | `no_active_episode` | The operation needs a started episode. |
 | `episode_finished` | The episode already ended; start or reset one. |
 | `stale_episode` | expected_episode_id is not the active episode; the action was not applied. |

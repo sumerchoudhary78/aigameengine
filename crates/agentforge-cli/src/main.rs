@@ -5,8 +5,10 @@
 //! * `replay verify` re-executes a replay in this (fresh) process.
 //! * `schema` writes or checks the generated protocol documentation.
 //! * `bench` measures simulation and protocol throughput.
+//! * `physics` serves, demonstrates, verifies and measures rigid-body worlds.
 
 mod bench;
+mod physics;
 
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
@@ -23,7 +25,7 @@ use serde_json::json;
 #[command(
     name = "agentforge",
     version,
-    about = "Agent-operated deterministic grid game engine"
+    about = "Agent-operated grid and rigid-body game engine"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,6 +34,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Fixed-timestep 2D rigid-body physics tools.
+    #[command(subcommand)]
+    Physics(physics::PhysicsCommand),
     /// Serve one session over JSON Lines on stdin/stdout. Logs go to stderr
     /// (filter with AGENTFORGE_LOG, e.g. AGENTFORGE_LOG=debug).
     Serve(ServeArgs),
@@ -110,6 +115,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging();
     let result = match cli.command {
+        Command::Physics(command) => physics::run(command),
         Command::Serve(args) => serve(args),
         Command::Demo(args) => demo(&args),
         Command::Replay(ReplayCommand::Verify {
