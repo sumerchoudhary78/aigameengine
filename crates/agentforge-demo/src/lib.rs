@@ -12,6 +12,7 @@
 
 pub mod builder;
 pub mod client;
+pub mod physics;
 pub mod player;
 pub mod scenario;
 

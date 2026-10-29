@@ -1,0 +1,22 @@
+[package]
+name = "agentforge-physics"
+description = "Deterministic 2D rigid-body physics worlds for AgentForge, built on Rapier with enhanced determinism enabled. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentforge-core.workspace = true
+rapier2d-f64.workspace = true
+schemars.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

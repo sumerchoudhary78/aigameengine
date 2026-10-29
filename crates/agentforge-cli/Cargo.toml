@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 agentforge-core.workspace = true
+agentforge-physics.workspace = true
 agentforge-demo.workspace = true
 agentforge-host.workspace = true
 clap.workspace = true

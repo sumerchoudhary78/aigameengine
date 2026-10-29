@@ -9,6 +9,22 @@ use std::io::{self, BufRead, Read, Write};
 use crate::protocol::{ErrorBody, ErrorCode, MAX_REQUEST_BYTES, ResponseEnvelope};
 use crate::session::Host;
 
+/// A local session served by the shared bounded JSON Lines transport.
+pub trait Session {
+    /// Current monotonic authoring revision.
+    fn revision(&self) -> u64;
+    /// Handles one input line and returns its correlated protocol response.
+    fn handle_line(&mut self, line: &str) -> ResponseEnvelope;
+}
+impl Session for Host {
+    fn revision(&self) -> u64 {
+        Host::revision(self)
+    }
+    fn handle_line(&mut self, line: &str) -> ResponseEnvelope {
+        Host::handle_line(self, line)
+    }
+}
+
 /// Counters reported when the input ends.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ServeStats {
@@ -21,7 +37,7 @@ pub struct ServeStats {
 /// Serves requests from `input` until end of input, writing responses to `output`.
 /// Returns an error only if reading or writing the streams themselves fails.
 pub fn serve<R: BufRead, W: Write>(
-    host: &mut Host,
+    host: &mut impl Session,
     mut input: R,
     mut output: W,
 ) -> io::Result<ServeStats> {

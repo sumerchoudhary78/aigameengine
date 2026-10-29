@@ -14,6 +14,7 @@
 #![warn(missing_docs)]
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod physics;
 pub mod protocol;
 pub mod server;
 pub mod session;
