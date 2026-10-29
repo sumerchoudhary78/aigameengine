@@ -339,33 +339,38 @@ mod tests {
         assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
     }
 
-    /// Regression: files written through a temporary file were left with mode 0600.
+    /// Regression: files written through a temporary file were left with mode 0600. The
+    /// expectation is relative to a file created normally in the same directory, so the
+    /// test holds under any umask.
     #[cfg(unix)]
     #[test]
-    fn saved_files_get_shareable_permissions_and_keep_existing_ones() {
+    fn saved_files_get_ordinary_permissions_and_keep_existing_ones() {
         use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777
+        };
         let directory = tempfile::tempdir().expect("temp dir");
+        let reference = directory.path().join("reference.json");
+        std::fs::write(&reference, b"{}").expect("write");
         let path = directory.path().join("shared.json");
         write_atomic(&path, b"{}").expect("write");
-        let mode = std::fs::metadata(&path)
-            .expect("exists")
-            .permissions()
-            .mode()
-            & 0o777;
         assert_eq!(
-            mode & 0o044,
-            0o044,
-            "group/other must be able to read, got {mode:o}"
+            mode(&path) & 0o044,
+            mode(&reference) & 0o044,
+            "group/other read access must match an ordinarily created file"
         );
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         write_atomic(&path, b"{}").expect("rewrite");
-        let mode = std::fs::metadata(&path)
-            .expect("exists")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "an existing file's permissions are preserved");
+        assert_eq!(
+            mode(&path),
+            0o600,
+            "an existing file's permissions are preserved"
+        );
     }
 
     #[test]

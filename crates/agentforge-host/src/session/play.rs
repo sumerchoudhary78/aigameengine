@@ -80,6 +80,20 @@ impl Host {
 
     pub(super) fn episode_act(&mut self, args: ActArgs) -> Result<ActResult, ApiError> {
         let active = self.episode.as_mut().ok_or_else(no_active_episode)?;
+        if let Some(expected) = args.expected_episode_id
+            && expected != active.id
+        {
+            return Err(ApiError::new(
+                ErrorCode::StaleEpisode,
+                format!(
+                    "expected_episode_id {expected} is not the active episode {}; the action was not applied",
+                    active.id
+                ),
+            )
+            .with("expected_episode_id", expected)
+            .with("active_episode_id", active.id)
+            .hint("The episode was reset, restarted or restored since; call episode.observe and decide again."));
+        }
         let tick = active.episode.tick();
         if let Some(expected) = args.expected_tick
             && expected != tick
@@ -193,7 +207,12 @@ impl Host {
 
     pub(super) fn replay_export(&self, args: ReplayExportArgs) -> Result<ReplayExported, ApiError> {
         let active = self.active_episode()?;
-        let replay = active.episode.to_replay(Some(active.scene.to_string()));
+        let mut replay = active.episode.to_replay(Some(active.scene.to_string()));
+        if self.role == Role::Player {
+            // Labels are authoring notes; players never see them.
+            replay = replay.without_labels();
+        }
+        let fingerprint = replay.fingerprint();
         let destination = match (self.role, args.path) {
             (Role::Player, Some(_)) => {
                 return Err(ApiError::new(
@@ -202,12 +221,19 @@ impl Host {
                 )
                 .hint("Omit `path`: the replay is written to the launcher's --replay-dir, or returned inline."));
             }
+            // Content-addressed: the same recording always gets the same name, and different
+            // recordings never share one, even across player processes.
             (Role::Player, None) => self.replay_dir.as_ref().map(|directory| {
+                let status = match replay.outcome {
+                    Outcome::InProgress => "in-progress",
+                    Outcome::Won { .. } => "won",
+                    Outcome::Failed { .. } => "failed",
+                };
                 directory.join(format!(
-                    "{}-episode-{}-{}.replay.json",
+                    "{}-{status}-{}t-{}.replay.json",
                     active.scene,
-                    active.id,
-                    &replay.final_hash.to_hex()[..12]
+                    replay.steps.len(),
+                    &fingerprint.to_hex()[..16]
                 ))
             }),
             (Role::Author, path) => path.map(PathBuf::from),
@@ -222,6 +248,7 @@ impl Host {
                     steps,
                     outcome,
                     final_hash,
+                    fingerprint,
                     path: Some(path.display().to_string()),
                     replay: None,
                 })
@@ -231,6 +258,7 @@ impl Host {
                 steps,
                 outcome,
                 final_hash,
+                fingerprint,
                 path: None,
                 replay: Some(replay),
             }),

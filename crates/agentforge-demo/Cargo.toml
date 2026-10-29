@@ -4,6 +4,8 @@ description = "Scripted protocol clients (builder and player) that drive an Agen
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 publish.workspace = true
 
 # Deliberately no dependency on agentforge-core or agentforge-host: these clients

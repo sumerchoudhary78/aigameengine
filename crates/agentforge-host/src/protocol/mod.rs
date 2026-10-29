@@ -163,6 +163,7 @@ error_codes! {
     SceneNotPlayable => "scene_not_playable": "The scene lacks a player or an exit, so no episode can start.",
     NoActiveEpisode => "no_active_episode": "The operation needs a started episode.",
     EpisodeFinished => "episode_finished": "The episode already ended; start or reset one.",
+    StaleEpisode => "stale_episode": "expected_episode_id is not the active episode; the action was not applied.",
     StaleTick => "stale_tick": "expected_tick does not match the episode's tick; the action was not applied.",
     MoveBlocked => "move_blocked": "A wall occupies the move target.",
     DoorLocked => "door_locked": "The move target is a door whose key the player does not hold.",

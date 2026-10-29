@@ -15,7 +15,7 @@ use super::errors::{
     ApiError, analysis_error, batch_error, invalid_arguments, layout_error, name_error,
     replay_error, scene_error, single_edit_error, storage_error,
 };
-use super::{Host, Snapshot, Workspace};
+use super::{ActiveEpisode, Host, Snapshot, Workspace};
 use crate::protocol::ErrorCode;
 use crate::protocol::catalog::MAX_SNAPSHOTS;
 use crate::protocol::ops::*;
@@ -305,6 +305,7 @@ impl Host {
             label,
             captured_at_revision: self.revision,
             project: self.workspace.as_ref().map(|w| w.project.clone()),
+            project_path: self.workspace.as_ref().and_then(|w| w.path.clone()),
             episode: self.episode.clone(),
         };
         let info = Self::snapshot_info(&snapshot);
@@ -327,13 +328,21 @@ impl Host {
             .with("available", self.snapshots.keys().collect::<Vec<_>>())
         })?;
         let info = Self::snapshot_info(snapshot);
-        let path = self.workspace.as_ref().and_then(|w| w.path.clone());
         let workspace = snapshot.project.clone().map(|project| Workspace {
             project,
-            path,
+            path: snapshot.project_path.clone(),
             dirty: true,
         });
-        let episode = snapshot.episode.clone();
+        // The restored episode continues a new timeline, so it gets a fresh id: a client
+        // still holding the old id gets `stale_episode` instead of acting on it by accident.
+        let episode = snapshot.episode.clone().map(|captured| ActiveEpisode {
+            id: self.next_episode_id,
+            ..captured
+        });
+        let active_episode = episode.as_ref().map(super::episode_brief);
+        if episode.is_some() {
+            self.next_episode_id += 1;
+        }
         self.workspace = workspace;
         self.episode = episode;
         // The revision moves forward, never back to captured_at_revision, so writes based
@@ -342,6 +351,7 @@ impl Host {
         Ok(SnapshotRestored {
             snapshot: info,
             revision: self.revision,
+            active_episode,
         })
     }
 

@@ -59,7 +59,8 @@ author process  --project.save-->  project file  --(launcher)-->  player process
 
 - **Author**: every operation, including play.
 - **Player**: `discover`, `session.status`, `episode.*` and `replay.export`, only for the
-  scene the launcher bound. A player cannot edit scenes or rules, spawn entities, set state,
+  scene the launcher bound. Players never see authoring labels: observations omit them, and
+  their replay exports strip them. A player cannot edit scenes or rules, spawn entities, set state,
   capture or restore snapshots, load or save projects, verify replays from files, choose
   output paths, or start another scene. A `role` field in a request is rejected as an
   unknown envelope field.
@@ -80,8 +81,11 @@ with real authentication, which is out of scope.
 - `snapshot.restore` also increments the revision. It never rewinds to the captured revision,
   so a write based on any pre-restore revision (including the snapshot's own) stays stale.
 - `request_id` is correlation only; there is no deduplication. Retrying a mutation whose first
-  delivery succeeded yields `stale_revision`. Retrying `episode.act` with `expected_tick`
-  yields `stale_tick` instead of moving twice.
+  delivery succeeded yields `stale_revision`. `episode.act` takes `expected_episode_id` and
+  `expected_tick`: a duplicate yields `stale_tick`, and an action meant for an episode that
+  has since been reset, restarted or restored yields `stale_episode`. Episode ids are never
+  reused; a restored episode continues under a new id, because tick numbers repeat across
+  timelines and would otherwise let a delayed action land on the wrong one.
 
 ## Episodes (editor/play separation)
 
@@ -98,6 +102,8 @@ with real authentication, which is out of scope.
 There are no autonomous entities, timers or randomness, so no simulation work is pending
 between ticks. Snapshots therefore capture entities, rules, the ID allocator, tick, player,
 inventory, outcome, events and the step log, which is the complete state needed to continue.
+They also record the project's save path as metadata, so a restored project saves back to
+its own file and never over another project's.
 
 ## Determinism
 
@@ -113,9 +119,9 @@ What makes outcomes a pure function of (initial scene, accepted actions):
 
 **Scope of the guarantee.** Identical hashes for identical inputs are tested within a process
 and across processes (save/load, fresh-process replay verification). The golden-hash tests
-pin the byte encoding, were cross-checked against an independent Python implementation, and
-run in CI on Linux and macOS. Identity across other platforms or future engine versions is
-not claimed. Replays declare `format_version` and `state_hash_version`; mismatches are
+pin the byte encoding and were cross-checked against an independent Python implementation.
+Verification so far ran on macOS (arm64); identity across other platforms or future engine
+versions is not claimed. Replays declare `format_version` and `state_hash_version`; mismatches are
 rejected explicitly instead of being reported as divergences.
 
 ## Canonical hashing
@@ -157,6 +163,19 @@ Each key color appears at most once per scene, so the inventory also determines 
 were collected. Session metadata (revisions, ids of episodes and snapshots, paths) is never
 hashed.
 
+**Recording fingerprint** (identifies a replay; used for content-addressed file names)
+
+```
+str("agentforge.recording.v1")
+32 raw bytes scene digest, 32 raw bytes initial hash
+u32 step_count
+per step: u32 tick, u8 action (1-4 move north/east/south/west, 5 wait, 6 forfeit), 32 hash bytes
+32 raw bytes final hash
+```
+
+Two different routes to the same end state have the same final hash, but always different
+fingerprints.
+
 ## Replays
 
 A replay contains the frozen initial scene, its digest, the tick-0 hash, every accepted
@@ -179,12 +198,26 @@ the replay starts from that project's scene.
   exhaustive and bounded; consumable keys would make the state space grow exponentially with
   the number of doors.
 
-When gameplay fails, the **frontier** (walls and never-openable doors adjacent to the
-reachable region) is reported. Removing anything not on the frontier cannot enlarge the
-region, so single-removal repairs only consider frontier entities, up to 64 per query. Each
-candidate is verified by re-running the search without it, and only verified candidates are
-listed. If none works, the report says that at least two changes are needed. It never
-guesses a culprit.
+Stepping onto an exit while the win condition holds ends the episode, so the search never
+continues past such a state. A route to a cell beyond an exit is therefore correctly
+unreachable, and a key behind a winning exit is correctly unobtainable.
+
+When gameplay fails, the report names the **blockers**: walls next to cells the player can
+still move on from, doors whose key is missing or unreachable, required keys that cannot be
+reached (`collect_all_keys_then_exit`), and exits that end the episode before a cell
+target. **Repair candidates** are every entity whose single removal could change the search
+result:
+
+- walls and doors adjacent to cells the player can still move on from (the search never
+  tries to enter any other wall or door);
+- every key, when the win condition requires all keys (removing a key can only drop a
+  requirement or close doors);
+- exits reached in a winning state, for cell targets.
+
+Each candidate (up to 64 per query) is verified by re-running the search without it, and
+only verified repairs are listed. Because the candidate set covers everything that could
+matter, "none of the candidates works" after an exhaustive evaluation proves that at least
+two changes are needed. The report never guesses a culprit.
 
 ## Schemas and documentation without drift
 
@@ -193,7 +226,7 @@ guesses a culprit.
   `discover`, `docs/protocol/protocol.schema.json` and `docs/protocol/operations.md` are
   generated from it.
 - Tests check that every published example parses into its argument type and that the
-  committed docs equal the generator output (`agentforge schema --check`, also run in CI).
+  committed docs equal the generator output (`agentforge schema --check`).
 
 ## Persistence
 
@@ -202,6 +235,11 @@ guesses a culprit.
   **before** strict parsing so files from newer versions get a precise "unsupported version"
   error. Content is then fully validated (scene invariants, ids within the allocated range)
   before the session changes.
+- Player replay exports are named `<scene>-<outcome>-<ticks>t-<fingerprint>.replay.json`
+  inside the launcher's `--replay-dir`. The same recording always gets the same name, and
+  different recordings never share one, even when several player processes share the
+  directory. Player exports strip authoring labels; labels are not hashed, so verification
+  is unaffected.
 - Writes are atomic where the OS allows: temporary file in the destination directory →
   `fsync` → rename → best-effort directory `fsync`. Existing file permissions are kept, and
   new files get 0644. A regression test covers this: the first version left files at the

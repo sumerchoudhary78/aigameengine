@@ -118,6 +118,9 @@ pub(crate) fn scene_error(error: SceneError) -> ApiError {
         }
         SceneError::EmptyUpdate { op } => invalid_arguments(message).with("op", op),
         SceneError::IdSpaceExhausted => ApiError::new(ErrorCode::LimitExceeded, message),
+        SceneError::InvalidNextEntityId { next_entity_id, .. } => {
+            invalid_arguments(message).with("next_entity_id", next_entity_id)
+        }
         SceneError::DuplicateEntityId { id } | SceneError::IdOutsideAllocatedRange { id, .. } => {
             invalid_arguments(message).with("entity", id)
         }

@@ -68,8 +68,10 @@ process separation, not authentication.
   stale.
 - **Retrying safely.** If a mutation's response was lost, resending it with the same
   `expected_revision` returns `stale_revision` when the first attempt already applied; check
-  the state instead of resending blindly. For `episode.act`, pass `expected_tick`: a
-  duplicate then returns `stale_tick` instead of moving twice (real output):
+  the state instead of resending blindly. For `episode.act`, pass `expected_episode_id` and
+  `expected_tick`. An action meant for an episode that was since reset, restarted or
+  restored returns `stale_episode` (episode ids are never reused, and a restored episode
+  gets a new one). A duplicate returns `stale_tick` instead of moving twice (real output):
 
   ```json
   {"request_id": "7", "protocol_version": 1, "operation": "episode.act", "status": "error", "revision": 2, "error": {"code": "stale_tick", "message": "expected_tick 0 does not match the current tick 1; the action was not applied", "details": {"expected_tick": 0, "current_tick": 1}, "hint": "If a previous attempt of this action succeeded, do not resend it; call episode.observe."}}
@@ -85,12 +87,15 @@ process separation, not authentication.
 with `entity.*` or `scene.apply_batch` → `project.save` → (optionally) `scene.render` to SVG.
 
 **Player** (`--role player`): `episode.start` → read `observation.legal_actions`, `ascii`,
-`objective` → `episode.act` with `expected_tick` until the outcome leaves `in_progress` →
-`replay.export`.
+`objective` → `episode.act` with `expected_episode_id` and `expected_tick` until the outcome
+leaves `in_progress` → `replay.export` (written to the launcher's `--replay-dir` under a
+content-addressed name, without authoring labels).
 
 **Diagnosis**: `analysis.reachability` returns `verdict`, a one-paragraph `summary`, the
 walls-only (`geometric`) and rules-aware (`gameplay`) answers with paths, frontier `blockers`,
-and `repairs.single_removals`. Every listed removal has been verified by re-solving.
+and `repairs.single_removals`. Every listed removal has been verified by re-solving, and
+the candidates cover every entity whose single removal could matter. When
+`repairs.exhaustive` is true and the list is empty, at least two changes are needed.
 `assumptions` lists the model behind the answer.
 
 ## Game model summary

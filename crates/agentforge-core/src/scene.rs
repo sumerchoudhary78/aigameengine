@@ -133,6 +133,14 @@ pub enum SceneError {
         /// The document's allocator state.
         next_entity_id: u32,
     },
+    /// A document whose allocator would hand out an id below [`IdAllocator::FIRST`].
+    #[error("next_entity_id must be at least {min}, got {next_entity_id}")]
+    InvalidNextEntityId {
+        /// The document's allocator state.
+        next_entity_id: u32,
+        /// Smallest valid value.
+        min: u32,
+    },
     /// The allocator cannot produce another id.
     #[error("entity id space is exhausted")]
     IdSpaceExhausted,
@@ -238,6 +246,14 @@ impl Scene {
     /// Rebuilds a scene from its document, checking every invariant.
     pub fn from_document(document: SceneDocument) -> Result<Self, SceneError> {
         let mut scene = Self::new(document.size, document.rules)?;
+        if document.next_entity_id < IdAllocator::FIRST {
+            // Otherwise the scene would allocate id 0, which no document may contain, and
+            // could be saved but never loaded again.
+            return Err(SceneError::InvalidNextEntityId {
+                next_entity_id: document.next_entity_id,
+                min: IdAllocator::FIRST,
+            });
+        }
         scene.ids = IdAllocator::starting_at(document.next_entity_id);
         for entity in document.entities {
             let raw = entity.id.get();
@@ -650,6 +666,17 @@ mod tests {
         assert!(matches!(
             Scene::from_document(beyond),
             Err(SceneError::IdOutsideAllocatedRange { .. })
+        ));
+
+        // Regression: an allocator at 0 used to load, then hand out id 0 and produce a
+        // file that saved fine but could never be loaded again.
+        let mut zero = Scene::new(GridSize::new(2, 2), Rules::default())
+            .expect("valid")
+            .to_document();
+        zero.next_entity_id = 0;
+        assert!(matches!(
+            Scene::from_document(zero),
+            Err(SceneError::InvalidNextEntityId { .. })
         ));
 
         let mut duplicate = document;

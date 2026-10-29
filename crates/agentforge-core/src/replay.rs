@@ -176,6 +176,33 @@ pub struct ReplayVerification {
     pub divergence: Option<Divergence>,
 }
 
+impl Replay {
+    /// The recording's fingerprint (see [`crate::hash::recording_fingerprint`]): equal
+    /// exactly for replays of the same actions from the same scene.
+    pub fn fingerprint(&self) -> StateHash {
+        let steps: Vec<_> = self
+            .steps
+            .iter()
+            .map(|step| (step.tick, step.action, step.hash))
+            .collect();
+        crate::hash::recording_fingerprint(
+            &self.scene_digest,
+            &self.initial_hash,
+            &steps,
+            &self.final_hash,
+        )
+    }
+
+    /// Removes authoring labels from the embedded scene (for player-facing exports).
+    /// Labels are not hashed, so verification is unaffected.
+    pub fn without_labels(mut self) -> Self {
+        for entity in &mut self.scene.entities {
+            entity.label = None;
+        }
+        self
+    }
+}
+
 /// Rejects replays this build cannot interpret.
 pub fn check_compatibility(replay: &Replay) -> Result<(), ReplayError> {
     if replay.format != REPLAY_FORMAT {
@@ -335,6 +362,55 @@ mod tests {
             report.divergence,
             Some(Divergence::SceneDigest { .. })
         ));
+    }
+
+    #[test]
+    fn fingerprints_distinguish_routes_that_end_in_the_same_state() {
+        // Regression: replay file names were derived from the final state, so two routes
+        // with the same end state overwrote each other's files.
+        let scene = Scene::new(GridSize::new(3, 1), Rules::default())
+            .expect("valid")
+            .apply_edits(&[
+                SceneEdit::CreateEntity {
+                    kind: EntityKind::Player,
+                    position: Position::new(0, 0),
+                    label: Some("note".to_owned()),
+                },
+                SceneEdit::CreateEntity {
+                    kind: EntityKind::Exit,
+                    position: Position::new(2, 0),
+                    label: None,
+                },
+            ])
+            .expect("valid")
+            .0;
+        let east = Action::Move {
+            direction: Direction::East,
+        };
+        let record = |actions: [Action; 3]| {
+            let mut episode = Episode::start(&scene).expect("playable");
+            for action in actions {
+                episode.apply(action).expect("legal");
+            }
+            episode.to_replay(None)
+        };
+        let first = record([Action::Wait, east, east]);
+        let second = record([east, Action::Wait, east]);
+        assert_eq!(first.final_hash, second.final_hash, "same end state");
+        assert_ne!(
+            first.fingerprint(),
+            second.fingerprint(),
+            "different recordings"
+        );
+        assert_eq!(
+            first.fingerprint(),
+            record([Action::Wait, east, east]).fingerprint()
+        );
+
+        let stripped = first.clone().without_labels();
+        assert!(stripped.scene.entities.iter().all(|e| e.label.is_none()));
+        assert_eq!(stripped.fingerprint(), first.fingerprint());
+        assert!(verify(&stripped).expect("compatible").verified);
     }
 
     #[test]

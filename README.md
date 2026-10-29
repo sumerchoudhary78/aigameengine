@@ -21,11 +21,13 @@ inside the simulation loop: the engine executes the rules itself.
 - **Play through the protocol**: episodes on a frozen copy of a scene, full observations
   (structured + ASCII + legal actions), one accepted action = exactly one logical tick,
   rejected actions change nothing and explain why (`door_locked` names the key and where it
-  is), retry-safe actions via `expected_tick`, events, assertions.
+  is), exactly-once retries via `expected_episode_id` + `expected_tick`, events, assertions.
 - **Diagnostics that say what is actually wrong**: geometric (walls-only) vs gameplay
-  (keys/doors/win condition/`max_ticks`) reachability, computed by exhaustive search, so
-  "unsolvable" is a proof; blockers on the frontier; single-removal repairs that the engine
-  has *verified* by re-solving; an explicit statement when no single removal suffices.
+  (keys, doors, exits that end the episode, win condition, `max_ticks`) reachability,
+  computed by exhaustive search, so "unsolvable" is a proof; named blockers (walls, doors
+  whose key is missing or unreachable, unreachable required keys); single-removal repairs
+  the engine has *verified* by re-solving, drawn from every entity whose removal could
+  matter, so "no single removal works" is also a proof.
 - **Capability-separated sessions**: the launcher fixes each process's role
   (`--role author|player`). Player processes get a saved project and one scene; they cannot
   edit, restore, choose files or switch scenes. Requests cannot change a role.
@@ -41,8 +43,8 @@ inside the simulation loop: the engine executes the rules itself.
 ## Quick start
 
 Requirements: a Rust toolchain ≥ 1.99. The exact toolchain is pinned in
-`rust-toolchain.toml`; everything below was verified with rustc 1.99.0 on macOS (arm64),
-and CI runs it on Linux and macOS.
+`rust-toolchain.toml`; everything below was verified with rustc 1.99.0 on macOS (arm64).
+Continuous integration is not active yet (see [Limitations](#limitations)).
 
 ```sh
 cargo build --workspace --release
@@ -53,10 +55,10 @@ cargo build --workspace --release
 # re-verifies the winning replay.
 cargo run --release -p agentforge-cli -- demo --out out/demo
 
-# Re-verify the winning replay yourself in another fresh process. The file name is
-# deterministic (it embeds a prefix of the final state hash):
+# Re-verify the winning replay yourself in another fresh process. Replay file names are
+# content-addressed (scene, outcome, ticks, recording fingerprint), so this one is stable:
 cargo run --release -p agentforge-cli -- replay verify \
-  out/demo/replays/blocked_dungeon-episode-1-46ed60eaee13.replay.json \
+  out/demo/replays/blocked_dungeon-won-14t-5afdce3c1ed150fd.replay.json \
   --project out/demo/project.agentforge.json
 # or, with jq:  replay verify "$(jq -r .second_attempt.replay out/demo/summary.json)" --project ...
 ```
@@ -147,8 +149,11 @@ observation after every move should pass `"include_observation": false`.
   a time must either pipe whole scripts or keep a process open themselves. An MCP adapter
   would remove this friction; it is not built yet.
 - **Reproducibility scope.** Replays verify against the same replay format and hash-encoding
-  version, and are tested with this engine version on Linux and macOS. Other
-  cross-version or cross-platform identity is not claimed.
+  version, and are tested with this engine version on macOS (arm64). Other cross-version
+  or cross-platform identity is not claimed.
+- **No CI yet.** All checks were run locally. A GitHub Actions workflow (fmt, clippy,
+  tests, demo and replay verification on Linux and macOS) is prepared but not yet published,
+  because publishing workflow files needs a token with the `workflow` scope.
 - **Session scope.** One active episode per session; snapshots live in memory only; replays
   cover one episode and do not include authoring edits.
 
@@ -164,4 +169,8 @@ hidden-information games.
 
 ## License
 
-No license has been chosen yet, so all rights are reserved by the author until one is added.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option. Unless you explicitly state otherwise, any
+contribution intentionally submitted for inclusion in this work, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional terms or
+conditions.

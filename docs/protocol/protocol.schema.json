@@ -490,6 +490,7 @@
             "type": "move",
             "direction": "east"
           },
+          "expected_episode_id": 1,
           "expected_tick": 0
         }
       }
@@ -736,6 +737,10 @@
     {
       "code": "episode_finished",
       "meaning": "The episode already ended; start or reset one."
+    },
+    {
+      "code": "stale_episode",
+      "meaning": "expected_episode_id is not the active episode; the action was not applied."
     },
     {
       "code": "stale_tick",
@@ -1030,6 +1035,11 @@
           "type": "string",
           "const": "episode_finished",
           "description": "The episode already ended; start or reset one."
+        },
+        {
+          "type": "string",
+          "const": "stale_episode",
+          "description": "expected_episode_id is not the active episode; the action was not applied."
         },
         {
           "type": "string",
@@ -3128,7 +3138,7 @@
           "items": {
             "$ref": "#/$defs/Blocker"
           },
-          "description": "Blockers bordering the reachable region (only when gameplay has no path)."
+          "description": "What stops the player (only when gameplay has no path)."
         },
         "repairs": {
           "anyOf": [
@@ -3436,14 +3446,14 @@
         "position",
         "reason"
       ],
-      "description": "An entity bordering the gameplay-reachable region that stops further progress."
+      "description": "An entity that stops the player from reaching the target."
     },
     "BlockerReason": {
       "oneOf": [
         {
           "type": "string",
           "const": "wall",
-          "description": "A wall."
+          "description": "A wall next to a cell the player can still move on from."
         },
         {
           "type": "string",
@@ -3454,28 +3464,38 @@
           "type": "string",
           "const": "door_key_unobtainable",
           "description": "A door whose key exists but cannot be picked up from the start."
+        },
+        {
+          "type": "string",
+          "const": "required_key_unobtainable",
+          "description": "A key the win condition requires that cannot be picked up from the start."
+        },
+        {
+          "type": "string",
+          "const": "episode_ending_exit",
+          "description": "An exit that ends the episode (as a win) before the cell target can be reached."
         }
       ],
-      "description": "Why an entity blocks the reachable region."
+      "description": "Why an entity blocks the target."
     },
     "RepairReport": {
       "type": "object",
       "properties": {
-        "frontier_size": {
+        "candidates": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Blockers bordering the reachable region."
+          "description": "Entities whose single removal could change the result."
         },
         "evaluated": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Blockers actually evaluated (at most `MAX_REPAIR_CANDIDATES`)."
+          "description": "Candidates actually evaluated (at most `MAX_REPAIR_CANDIDATES`)."
         },
         "exhaustive": {
           "type": "boolean",
-          "description": "Whether every frontier blocker was evaluated."
+          "description": "Whether every candidate was evaluated."
         },
         "single_removals": {
           "type": "array",
@@ -3490,7 +3510,7 @@
         }
       },
       "required": [
-        "frontier_size",
+        "candidates",
         "evaluated",
         "exhaustive",
         "single_removals",
@@ -3815,6 +3835,15 @@
           "$ref": "#/$defs/Action",
           "description": "The action."
         },
+        "expected_episode_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "If given, the action is rejected (`stale_episode`) unless this is the active episode.\nEpisode ids are never reused (reset, start and restore all issue new ones)."
+        },
         "expected_tick": {
           "type": [
             "integer",
@@ -3822,7 +3851,7 @@
           ],
           "format": "uint32",
           "minimum": 0,
-          "description": "If given, the action is rejected (`stale_tick`) unless the episode is at this tick.\nRecommended: it makes retries safe."
+          "description": "If given, the action is rejected (`stale_tick`) unless the episode is at this tick.\nTogether with `expected_episode_id` this makes retries exactly-once."
         },
         "include_observation": {
           "type": "boolean",
@@ -4444,6 +4473,17 @@
           "format": "uint64",
           "minimum": 0,
           "description": "The new revision (always greater than before the restore)."
+        },
+        "active_episode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpisodeBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The restored episode under its new id, if the snapshot held one."
         }
       },
       "required": [
@@ -4489,6 +4529,10 @@
           "$ref": "#/$defs/StateHash",
           "description": "State hash at export time."
         },
+        "fingerprint": {
+          "$ref": "#/$defs/StateHash",
+          "description": "Identifies this recording (equal exactly for the same actions from the same scene)."
+        },
         "path": {
           "type": [
             "string",
@@ -4512,7 +4556,8 @@
         "episode_id",
         "steps",
         "outcome",
-        "final_hash"
+        "final_hash",
+        "fingerprint"
       ],
       "description": "Result of `replay.export`."
     },

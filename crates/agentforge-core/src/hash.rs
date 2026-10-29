@@ -20,7 +20,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::entity::EntityKind;
-use crate::episode::{EpisodeState, FailureReason, Outcome};
+use crate::episode::{Action, EpisodeState, FailureReason, Outcome};
+use crate::geometry::Direction;
 use crate::rules::WinCondition;
 use crate::scene::Scene;
 
@@ -29,6 +30,7 @@ pub const STATE_HASH_VERSION: u32 = 1;
 
 const SCENE_DOMAIN: &str = "agentforge.scene.v1";
 const STATE_DOMAIN: &str = "agentforge.state.v1";
+const RECORDING_DOMAIN: &str = "agentforge.recording.v1";
 
 /// A SHA-256 digest of a canonical encoding, written as `sha256:<64 lowercase hex>`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -249,6 +251,47 @@ pub fn state_hash(scene_digest: &StateHash, state: &EpisodeState) -> StateHash {
     let (code, tick) = outcome_code(state.outcome);
     encoder.u8(code);
     encoder.u32(tick);
+    encoder.finish()
+}
+
+/// Identifies a recording: two replays have the same fingerprint exactly when they record
+/// the same actions, with the same per-tick hashes, from the same scene.
+///
+/// Layout: `str("agentforge.recording.v1")`, the scene digest and initial hash (32 raw bytes
+/// each), `u32 step_count`, then per step `u32 tick`, `u8 action` (1-4 move
+/// north/east/south/west, 5 wait, 6 forfeit) and the 32 hash bytes, then the final hash.
+pub fn recording_fingerprint(
+    scene_digest: &StateHash,
+    initial_hash: &StateHash,
+    steps: &[(u32, Action, StateHash)],
+    final_hash: &StateHash,
+) -> StateHash {
+    let mut encoder = Encoder::new(RECORDING_DOMAIN);
+    encoder.bytes(scene_digest.as_bytes());
+    encoder.bytes(initial_hash.as_bytes());
+    // Steps are bounded by max_ticks (at most 10_000).
+    encoder.u32(steps.len() as u32);
+    for (tick, action, hash) in steps {
+        encoder.u32(*tick);
+        encoder.u8(match action {
+            Action::Move {
+                direction: Direction::North,
+            } => 1,
+            Action::Move {
+                direction: Direction::East,
+            } => 2,
+            Action::Move {
+                direction: Direction::South,
+            } => 3,
+            Action::Move {
+                direction: Direction::West,
+            } => 4,
+            Action::Wait => 5,
+            Action::Forfeit => 6,
+        });
+        encoder.bytes(hash.as_bytes());
+    }
+    encoder.bytes(final_hash.as_bytes());
     encoder.finish()
 }
 

@@ -152,7 +152,7 @@ Every request is one JSON line. Full argument and result schemas: `protocol.sche
 ### `episode.act`
 
 ```json
-{"request_id":"example-episode-act","protocol_version":1,"operation":"episode.act","arguments":{"action":{"type":"move","direction":"east"},"expected_tick":0}}
+{"request_id":"example-episode-act","protocol_version":1,"operation":"episode.act","arguments":{"action":{"type":"move","direction":"east"},"expected_episode_id":1,"expected_tick":0}}
 ```
 
 ### `episode.events`
@@ -219,6 +219,7 @@ Every request is one JSON line. Full argument and result schemas: `protocol.sche
 | `scene_not_playable` | The scene lacks a player or an exit, so no episode can start. |
 | `no_active_episode` | The operation needs a started episode. |
 | `episode_finished` | The episode already ended; start or reset one. |
+| `stale_episode` | expected_episode_id is not the active episode; the action was not applied. |
 | `stale_tick` | expected_tick does not match the episode's tick; the action was not applied. |
 | `move_blocked` | A wall occupies the move target. |
 | `door_locked` | The move target is a door whose key the player does not hold. |

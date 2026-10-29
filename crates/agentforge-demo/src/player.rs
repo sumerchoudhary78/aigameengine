@@ -60,7 +60,7 @@ pub fn play(session: &mut EngineSession) -> Result<PlayReport, ClientError> {
         let tick = observation["tick"].as_u64().unwrap_or_default();
         let result = session.call(
             "episode.act",
-            json!({"action": {"type": "move", "direction": direction}, "expected_tick": tick}),
+            json!({"action": {"type": "move", "direction": direction}, "expected_episode_id": episode_id, "expected_tick": tick}),
         )?;
         observation = result["observation"].clone();
         actions.push(format!("move {direction}"));
@@ -69,7 +69,7 @@ pub fn play(session: &mut EngineSession) -> Result<PlayReport, ClientError> {
         let tick = observation["tick"].as_u64().unwrap_or_default();
         let result = session.call(
             "episode.act",
-            json!({"action": {"type": "forfeit"}, "expected_tick": tick}),
+            json!({"action": {"type": "forfeit"}, "expected_episode_id": episode_id, "expected_tick": tick}),
         )?;
         observation = result["observation"].clone();
         actions.push("forfeit".to_owned());

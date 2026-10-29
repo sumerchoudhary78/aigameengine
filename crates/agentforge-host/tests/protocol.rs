@@ -672,3 +672,142 @@ fn generated_protocol_docs_are_up_to_date() {
         "operations.md is stale; run `cargo run -p agentforge-cli -- schema`"
     );
 }
+
+/// Regression: restoring a snapshot kept the current save path, so `project.save` could
+/// write the restored project over a different project's file.
+#[test]
+fn restoring_a_snapshot_never_redirects_saves_to_another_projects_file() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let alpha_path = directory.path().join("alpha.agentforge.json");
+    let beta_path = directory.path().join("beta.agentforge.json");
+    let mut session = Session::author();
+    session.ok(
+        "project.create",
+        json!({"name": "alpha", "expected_revision": 0}),
+    );
+    session.ok("project.save", json!({"path": alpha_path}));
+    let snapshot = session.ok("snapshot.capture", json!({}));
+    session.ok(
+        "project.create",
+        json!({"name": "beta", "expected_revision": 1}),
+    );
+    session.ok(
+        "scene.create",
+        json!({"name": "only_in_beta", "expected_revision": 2, "layout": ["@E"]}),
+    );
+    session.ok("project.save", json!({"path": beta_path}));
+
+    session.ok(
+        "snapshot.restore",
+        json!({"snapshot_id": snapshot["snapshot_id"], "expected_revision": 3}),
+    );
+    let saved = session.ok("project.save", json!({}));
+    assert_eq!(saved["path"], alpha_path.display().to_string());
+    let beta = storage::load_project(&beta_path).expect("beta still loads");
+    assert_eq!(
+        beta.name().as_str(),
+        "beta",
+        "beta's file was not overwritten"
+    );
+    assert_eq!(beta.scene_names().count(), 1);
+}
+
+/// Regression: after a reset or restore, tick numbers repeat, so `expected_tick` alone let a
+/// delayed duplicate act on a different episode.
+#[test]
+fn expected_episode_id_rejects_actions_meant_for_an_earlier_episode() {
+    let mut session = Session::author_with("key_vault");
+    let first = session.ok("episode.start", json!({"scene": "key_vault"}));
+    let first_id = first["episode_id"].clone();
+    let snapshot = session.ok("snapshot.capture", json!({}));
+    let reset = session.ok("episode.reset", json!({}));
+    assert_ne!(reset["episode_id"], first_id, "reset issues a new id");
+
+    let stale = session.err(
+        "episode.act",
+        json!({"action": {"type": "move", "direction": "south"}, "expected_episode_id": first_id, "expected_tick": 0}),
+    );
+    assert_eq!(stale["code"], "stale_episode");
+    assert_eq!(session.episode_brief()["tick"], 0, "nothing was applied");
+
+    let revision = session.revision();
+    let restored = session.ok(
+        "snapshot.restore",
+        json!({"snapshot_id": snapshot["snapshot_id"], "expected_revision": revision}),
+    );
+    let restored_id = restored["active_episode"]["episode_id"].clone();
+    assert_ne!(
+        restored_id, first_id,
+        "a restored episode is a new timeline with a new id"
+    );
+    assert_ne!(restored_id, reset["episode_id"]);
+    let accepted = session.ok(
+        "episode.act",
+        json!({"action": {"type": "move", "direction": "south"}, "expected_episode_id": restored_id, "expected_tick": 0}),
+    );
+    assert_eq!(accepted["tick"], 1);
+}
+
+/// Regressions: player replays leaked authoring labels, and replay files were named after
+/// the final state, so different routes to the same end state overwrote each other.
+#[test]
+fn player_replays_hide_labels_and_never_overwrite_different_recordings() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let project_path = directory.path().join("labelled.agentforge.json");
+    let replay_dir = directory.path().join("replays");
+    std::fs::create_dir_all(&replay_dir).expect("creatable");
+    let mut author = Session::author();
+    author.ok(
+        "project.create",
+        json!({"name": "labelled", "expected_revision": 0}),
+    );
+    author.ok(
+        "scene.create",
+        json!({"name": "line", "expected_revision": 1, "layout": ["@.E"]}),
+    );
+    author.ok(
+        "entity.update",
+        json!({"scene": "line", "expected_revision": 2, "id": 2, "label": "secret author note"}),
+    );
+    author.ok("project.save", json!({"path": project_path}));
+
+    let mut exports = Vec::new();
+    for route in [["wait", "east", "east"], ["east", "wait", "east"]] {
+        let project = storage::load_project(&project_path).expect("loads");
+        let mut player = Session {
+            host: Host::player(project, "line", Some(replay_dir.clone())).expect("bound"),
+            next: 0,
+        };
+        player.ok("episode.start", json!({}));
+        for step in route {
+            let action = if step == "wait" {
+                json!({"type": "wait"})
+            } else {
+                json!({"type": "move", "direction": step})
+            };
+            player.act(action);
+        }
+        exports.push(player.ok("replay.export", json!({})));
+    }
+    assert_eq!(
+        exports[0]["final_hash"], exports[1]["final_hash"],
+        "same end state"
+    );
+    assert_ne!(
+        exports[0]["path"], exports[1]["path"],
+        "different recordings, different files"
+    );
+    for export in &exports {
+        let path = PathBuf::from(export["path"].as_str().expect("written"));
+        let text = std::fs::read_to_string(&path).expect("readable");
+        assert!(
+            !text.contains("secret author note"),
+            "labels must not reach players"
+        );
+        let replay = storage::load_replay(&path).expect("parses");
+        assert_eq!(
+            replay.fingerprint().to_string(),
+            export["fingerprint"].as_str().expect("present")
+        );
+    }
+}

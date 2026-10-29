@@ -337,7 +337,7 @@ impl OpId {
                 "episode.act",
                 "Submit one action and advance exactly one tick. Rejected actions change nothing and explain why.",
                 BOTH, false, ActArgs => ActResult,
-                json!({"action": {"type": "move", "direction": "east"}, "expected_tick": 0})
+                json!({"action": {"type": "move", "direction": "east"}, "expected_episode_id": 1, "expected_tick": 0})
             ),
             OpId::EpisodeEvents => spec!(
                 "episode.events",
@@ -530,7 +530,7 @@ pub fn conventions() -> Conventions {
         framing: "One JSON request object per stdin line; exactly one JSON response line per request on stdout, in order. Logs go to stderr only. Blank lines are ignored. Malformed lines get a structured error and the session continues.".to_owned(),
         roles: "The launcher fixes the session role (author or player) when starting the process; requests cannot change it. This is local capability separation between processes, not remote authentication.".to_owned(),
         revisions: "Every accepted authoring mutation increments the session revision, and every response reports it. Mutations must pass expected_revision equal to the current revision or fail with stale_revision and no changes. Restoring a snapshot also increments the revision, so writes based on pre-restore revisions stay stale.".to_owned(),
-        retries: "request_id is correlation only; the engine never deduplicates. A retried mutation whose first delivery succeeded fails with stale_revision (check state, do not blindly resend). A retried episode.act with expected_tick fails with stale_tick instead of moving twice; without expected_tick a duplicate is applied again.".to_owned(),
+        retries: "request_id is correlation only; the engine never deduplicates. A retried mutation whose first delivery succeeded fails with stale_revision (check state, do not blindly resend). For episode.act pass expected_episode_id and expected_tick: a duplicate then fails with stale_tick, and an action meant for an episode that was since reset, restarted or restored fails with stale_episode, instead of being applied twice or to the wrong episode. Episode ids are never reused.".to_owned(),
         determinism: "Same initial state plus same accepted actions yields the same canonical state hashes (SHA-256 of a documented byte encoding; see docs/ARCHITECTURE.md). Reproducibility is verified for this engine version and replay format; cross-version or cross-platform identity is not claimed beyond what replay verification checks.".to_owned(),
         episodes: "An episode plays a frozen copy of a scene taken at episode.start. Scene edits never affect a running episode; start or reset an episode to play the edited scene. One active episode per session.".to_owned(),
     }

@@ -3,7 +3,7 @@
 //! Neighbours are expanded in [`Direction::ALL`] order and the frontier is a FIFO queue, so
 //! every search is deterministic and returns a shortest path.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::board::{Board, Occupant};
 use crate::entity::{EntityKind, KeyColor, KeySet};
@@ -15,8 +15,8 @@ use crate::ids::EntityId;
 pub(crate) enum Goal {
     /// Stand on this cell.
     Cell(Position),
-    /// Stand on an exit; with `collect_all_keys`, while holding every key on the board.
-    Objective { collect_all_keys: bool },
+    /// Win: stand on an exit while the win condition holds.
+    Objective,
 }
 
 /// Result of [`gameplay`].
@@ -26,8 +26,12 @@ pub(crate) struct GameplaySearch {
     pub moves: Option<Vec<Direction>>,
     /// Key colors picked up along `moves`, in pickup order.
     pub keys_on_path: Vec<KeyColor>,
-    /// Cells reachable in at least one (cell, keys) state.
+    /// Cells occupied in at least one reachable (cell, keys) state.
     pub reachable_cells: Vec<bool>,
+    /// Cells from which at least one reachable state can still move on (not a winning exit).
+    pub expandable_cells: Vec<bool>,
+    /// Exits reached in a winning state, which ends the episode there.
+    pub terminal_exits: BTreeSet<EntityId>,
     /// Key colors held in at least one reachable state.
     pub obtainable: KeySet,
     /// Number of (cell, keys) states expanded.
@@ -35,15 +39,18 @@ pub(crate) struct GameplaySearch {
 }
 
 /// Searches (cell, keys-held) states under the gameplay rules: walls block, doors need
-/// their key, keys are collected on entry and never consumed. The whole reachable state
-/// space is explored (it is at most 4096 cells x 256 key sets), so a `None` path proves
-/// the goal unreachable, and `reachable_cells`/`obtainable` describe the full closure.
+/// their key, keys are collected on entry and never consumed, and stepping onto an exit
+/// while the win condition holds ends the episode, so such states are never expanded.
+/// The whole reachable state space is explored (at most 4096 cells x 256 key sets), so a
+/// `None` path proves the goal unreachable and the closure fields are complete.
 ///
-/// `removed` names an entity to treat as absent, which is how repairs are verified.
+/// `collect_all_keys` selects the win condition; `removed` names an entity to treat as
+/// absent, which is how repairs are verified.
 pub(crate) fn gameplay(
     board: &Board,
     start: Position,
     goal: Goal,
+    collect_all_keys: bool,
     removed: Option<EntityId>,
 ) -> GameplaySearch {
     let size = board.size();
@@ -70,6 +77,8 @@ pub(crate) fn gameplay(
         moves: None,
         keys_on_path: Vec::new(),
         reachable_cells: vec![false; cells],
+        expandable_cells: vec![false; cells],
+        terminal_exits: BTreeSet::new(),
         obtainable: KeySet::EMPTY,
         explored_states: 0,
     };
@@ -86,17 +95,17 @@ pub(crate) fn gameplay(
         start_mask |= 1 << bit;
     }
 
+    // An exit wins (and ends the episode) when the win condition holds for `mask`.
+    let winning_exit = |index: usize, mask: usize| match occupant(index) {
+        Some(Occupant {
+            id,
+            kind: EntityKind::Exit,
+        }) if !collect_all_keys || mask == full_mask => Some(id),
+        _ => None,
+    };
     let is_goal = |index: usize, mask: usize| match goal {
         Goal::Cell(position) => size.index(position) == Some(index),
-        Goal::Objective { collect_all_keys } => {
-            matches!(
-                occupant(index),
-                Some(Occupant {
-                    kind: EntityKind::Exit,
-                    ..
-                })
-            ) && (!collect_all_keys || mask == full_mask)
-        }
+        Goal::Objective => winning_exit(index, mask).is_some(),
     };
 
     const UNVISITED: usize = usize::MAX;
@@ -116,6 +125,15 @@ pub(crate) fn gameplay(
         if goal_state.is_none() && is_goal(index, mask) {
             goal_state = Some(state);
         }
+        // Episodes never start on an exit, so the start state is always expandable; any
+        // other state on a winning exit is terminal.
+        if state != start_state
+            && let Some(exit) = winning_exit(index, mask)
+        {
+            result.terminal_exits.insert(exit);
+            continue;
+        }
+        result.expandable_cells[index] = true;
         let here = size.position(index);
         for (direction_index, direction) in Direction::ALL.into_iter().enumerate() {
             let Some(next_index) = size.index(here.step(direction)) else {
@@ -211,8 +229,8 @@ pub(crate) struct GeometricSearch {
     pub explored_cells: u32,
 }
 
-/// Searches cells with walls as the only obstacle: doors count as open and keys, win
-/// conditions and tick limits are ignored.
+/// Searches cells with walls as the only obstacle: doors count as open and keys, exits,
+/// win conditions and tick limits are ignored.
 pub(crate) fn geometric(board: &Board, start: Position, goal: GeometricGoal) -> GeometricSearch {
     let size = board.size();
     let mut result = GeometricSearch {
@@ -270,31 +288,25 @@ pub(crate) fn geometric(board: &Board, start: Position, goal: GeometricGoal) -> 
     result
 }
 
-/// Walls and never-openable doors adjacent to the gameplay closure, keyed by entity id.
-/// Removing anything not in this set cannot enlarge the closure, so single-removal repairs
-/// only need to consider these entities.
-pub(crate) fn frontier(
+/// Walls and doors adjacent to cells the player can still move on from, keyed by entity
+/// id. Walls and doors elsewhere are never even attempted by the search, so removing them
+/// cannot change its result.
+pub(crate) fn adjacent_barriers(
     board: &Board,
-    reachable_cells: &[bool],
-    obtainable: KeySet,
+    expandable_cells: &[bool],
 ) -> BTreeMap<EntityId, (EntityKind, Position)> {
     let size = board.size();
-    let mut blockers = BTreeMap::new();
-    for (index, _) in reachable_cells.iter().enumerate().filter(|(_, r)| **r) {
+    let mut barriers = BTreeMap::new();
+    for (index, _) in expandable_cells.iter().enumerate().filter(|(_, e)| **e) {
         let here = size.position(index);
         for direction in Direction::ALL {
             let neighbour = here.step(direction);
-            if let Some(Occupant { id, kind }) = board.at(neighbour) {
-                let blocks = match kind {
-                    EntityKind::Wall => true,
-                    EntityKind::Door { color } => !obtainable.contains(color),
-                    EntityKind::Player | EntityKind::Key { .. } | EntityKind::Exit => false,
-                };
-                if blocks {
-                    blockers.insert(id, (kind, neighbour));
-                }
+            if let Some(Occupant { id, kind }) = board.at(neighbour)
+                && matches!(kind, EntityKind::Wall | EntityKind::Door { .. })
+            {
+                barriers.insert(id, (kind, neighbour));
             }
         }
     }
-    blockers
+    barriers
 }

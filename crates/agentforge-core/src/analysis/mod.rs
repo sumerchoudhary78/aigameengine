@@ -10,12 +10,18 @@
 //!   and `max_ticks`. The search is exhaustive over (cell, keys held) states, so an
 //!   "unreachable" verdict is a proof for the current scene, not a heuristic.
 //!
-//! When gameplay fails, the analysis lists the blockers bordering the reachable region and
-//! verifies single-entity repairs by re-running the search with each blocker removed. It
-//! never names a culprit it has not verified; if no single removal works it says so.
+//! When gameplay fails, the analysis lists what blocks the reachable region and verifies
+//! single-entity repairs by re-running the search with each candidate removed. Candidates
+//! are every entity whose removal could change the search: walls and doors next to cells
+//! the player can still move on from, required keys (for `collect_all_keys_then_exit`),
+//! and exits that end the episode before a cell target is reached. It never names a
+//! culprit it has not verified; when no single removal works it says so, which is then a
+//! proof that at least two changes are needed.
 
 mod search;
 pub mod validation;
+
+use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -30,17 +36,18 @@ use search::{GeometricGoal, Goal};
 
 pub use validation::{Issue, IssueCode, Severity, ValidationReport, validate};
 
-/// Most frontier blockers evaluated as single-removal repairs per query.
+/// Most repair candidates verified per query.
 pub const MAX_REPAIR_CANDIDATES: usize = 64;
 
 /// Assumptions behind every [`ReachabilityReport`], published verbatim.
-pub const ASSUMPTIONS: [&str; 6] = [
+pub const ASSUMPTIONS: [&str; 7] = [
     "Movement is 4-directional on the integer grid; one move costs one tick.",
-    "Geometric reachability: walls block; doors count as open; keys, win condition and max_ticks are ignored.",
-    "Gameplay reachability: walls block; a door is passable only while holding its color's key; keys are collected on entry and never consumed; the objective target also requires the win condition and a path length of at most max_ticks.",
+    "Geometric reachability: walls block; doors count as open; keys, exits, win condition and max_ticks are ignored.",
+    "Gameplay reachability: walls block; a door is passable only while holding its color's key; keys are collected on entry and never consumed; stepping onto an exit while the win condition holds ends the episode, so no route continues past it; the objective target also requires a path length of at most max_ticks.",
     "The gameplay search is exhaustive over (cell, keys held) states, so 'unreachable' is a proof for the current scene, not a heuristic.",
     "Starting on a key cell counts as holding that key.",
-    "Repairs consider removing exactly one wall or never-openable door adjacent to the gameplay-reachable region; each listed repair was verified by re-running the gameplay search. Multi-entity repairs are not searched.",
+    "Repair candidates are every entity whose single removal could change the search: walls and doors next to cells the player can still move on from, all keys when every key is required, and exits that end the episode before a cell target. Each listed repair was verified by re-running the gameplay search without that entity.",
+    "Multi-entity repairs are not searched; when the candidate list was evaluated exhaustively and none works, at least two changes are needed.",
 ];
 
 /// Overall answer of a reachability query.
@@ -129,19 +136,23 @@ pub struct GameplayResult {
     pub explored_states: u32,
 }
 
-/// Why an entity blocks the reachable region.
+/// Why an entity blocks the target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockerReason {
-    /// A wall.
+    /// A wall next to a cell the player can still move on from.
     Wall,
     /// A door whose key color does not exist in the scene.
     DoorKeyNotInScene,
     /// A door whose key exists but cannot be picked up from the start.
     DoorKeyUnobtainable,
+    /// A key the win condition requires that cannot be picked up from the start.
+    RequiredKeyUnobtainable,
+    /// An exit that ends the episode (as a win) before the cell target can be reached.
+    EpisodeEndingExit,
 }
 
-/// An entity bordering the gameplay-reachable region that stops further progress.
+/// An entity that stops the player from reaching the target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Blocker {
     /// The blocking entity.
@@ -170,11 +181,11 @@ pub struct RepairCandidate {
 /// Single-removal repair search results.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct RepairReport {
-    /// Blockers bordering the reachable region.
-    pub frontier_size: u32,
-    /// Blockers actually evaluated (at most `MAX_REPAIR_CANDIDATES`).
+    /// Entities whose single removal could change the result.
+    pub candidates: u32,
+    /// Candidates actually evaluated (at most `MAX_REPAIR_CANDIDATES`).
     pub evaluated: u32,
-    /// Whether every frontier blocker was evaluated.
+    /// Whether every candidate was evaluated.
     pub exhaustive: bool,
     /// Verified repairs, shortest resulting path first, then by entity id.
     pub single_removals: Vec<RepairCandidate>,
@@ -199,7 +210,7 @@ pub struct ReachabilityReport {
     pub geometric: GeometricResult,
     /// Rules-aware answer.
     pub gameplay: GameplayResult,
-    /// Blockers bordering the reachable region (only when gameplay has no path).
+    /// What stops the player (only when gameplay has no path).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub blockers: Vec<Blocker>,
     /// Verified single-removal repairs (only when gameplay has no path).
@@ -281,13 +292,12 @@ pub fn reachability(
             Target::Objective {
                 win_condition: rules.win_condition,
             },
-            Goal::Objective {
-                collect_all_keys: rules.win_condition == WinCondition::CollectAllKeysThenExit,
-            },
+            Goal::Objective,
             GeometricGoal::AnyExit,
         ),
     };
     let objective = matches!(target, Target::Objective { .. });
+    let collect_all = rules.win_condition == WinCondition::CollectAllKeysThenExit;
 
     let walls_only = search::geometric(&board, from, geometric_goal);
     let geometric = GeometricResult {
@@ -297,7 +307,7 @@ pub fn reachability(
         explored_cells: walls_only.explored_cells,
     };
 
-    let play = search::gameplay(&board, from, goal, None);
+    let play = search::gameplay(&board, from, goal, collect_all, None);
     let path_length = play.moves.as_ref().map(|m| len_u32(m.len()));
     let within_max_ticks = path_length.is_some_and(|length| length <= rules.max_ticks);
     let unreachable_reason = match path_length {
@@ -318,25 +328,17 @@ pub fn reachability(
     };
 
     let (blockers, repairs) = if play.moves.is_none() {
-        let frontier = search::frontier(&board, &play.reachable_cells, play.obtainable);
-        let key_colors = scene.key_colors();
-        let blockers = frontier
-            .iter()
-            .map(|(id, (kind, position))| Blocker {
-                entity: *id,
-                kind: *kind,
-                position: *position,
-                reason: match kind {
-                    EntityKind::Door { color } if key_colors.contains(*color) => {
-                        BlockerReason::DoorKeyUnobtainable
-                    }
-                    EntityKind::Door { .. } => BlockerReason::DoorKeyNotInScene,
-                    _ => BlockerReason::Wall,
-                },
-            })
-            .collect();
-        let repairs = evaluate_repairs(&board, from, goal, objective, rules.max_ticks, &frontier);
-        (blockers, Some(repairs))
+        let (blockers, candidates) =
+            blockers_and_candidates(scene, &board, &play, objective, collect_all);
+        let search = RepairSearch {
+            board: &board,
+            from,
+            goal,
+            collect_all,
+            objective,
+            max_ticks: rules.max_ticks,
+        };
+        (blockers, Some(search.evaluate(&candidates)))
     } else {
         (Vec::new(), None)
     };
@@ -375,45 +377,132 @@ pub fn reachability(
     })
 }
 
-fn evaluate_repairs(
+type Candidates = BTreeMap<EntityId, (EntityKind, Position)>;
+
+/// Classifies what blocks the target and collects every entity whose single removal could
+/// change the gameplay search (see the module documentation for why this set is complete).
+fn blockers_and_candidates(
+    scene: &Scene,
     board: &Board,
-    from: Position,
-    goal: Goal,
+    play: &search::GameplaySearch,
     objective: bool,
-    max_ticks: u32,
-    frontier: &std::collections::BTreeMap<EntityId, (EntityKind, Position)>,
-) -> RepairReport {
-    let mut single_removals: Vec<RepairCandidate> = frontier
-        .iter()
-        .take(MAX_REPAIR_CANDIDATES)
-        .filter_map(|(id, (kind, position))| {
-            let moves = search::gameplay(board, from, goal, Some(*id)).moves?;
-            let length = len_u32(moves.len());
-            (!objective || length <= max_ticks).then_some(RepairCandidate {
-                remove: *id,
+    collect_all: bool,
+) -> (Vec<Blocker>, Candidates) {
+    let key_colors = scene.key_colors();
+    let mut blockers = Vec::new();
+    let mut candidates = search::adjacent_barriers(board, &play.expandable_cells);
+    for (id, (kind, position)) in &candidates {
+        let reason = match kind {
+            EntityKind::Wall => Some(BlockerReason::Wall),
+            EntityKind::Door { color } if play.obtainable.contains(*color) => None,
+            EntityKind::Door { color } if key_colors.contains(*color) => {
+                Some(BlockerReason::DoorKeyUnobtainable)
+            }
+            EntityKind::Door { .. } => Some(BlockerReason::DoorKeyNotInScene),
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            blockers.push(Blocker {
+                entity: *id,
                 kind: *kind,
                 position: *position,
-                resulting_path_length: length,
+                reason,
+            });
+        }
+    }
+    let mut extra = Vec::new();
+    if objective && collect_all {
+        for key in scene
+            .entities()
+            .filter(|e| matches!(e.kind, EntityKind::Key { .. }))
+        {
+            extra.push((key.id, key.kind, key.position));
+            if let EntityKind::Key { color } = key.kind
+                && !play.obtainable.contains(color)
+            {
+                blockers.push(Blocker {
+                    entity: key.id,
+                    kind: key.kind,
+                    position: key.position,
+                    reason: BlockerReason::RequiredKeyUnobtainable,
+                });
+            }
+        }
+    }
+    if !objective {
+        for exit in scene
+            .exits()
+            .filter(|e| play.terminal_exits.contains(&e.id))
+        {
+            extra.push((exit.id, exit.kind, exit.position));
+            blockers.push(Blocker {
+                entity: exit.id,
+                kind: exit.kind,
+                position: exit.position,
+                reason: BlockerReason::EpisodeEndingExit,
+            });
+        }
+    }
+    for (id, kind, position) in extra {
+        candidates.insert(id, (kind, position));
+    }
+    blockers.sort_by_key(|b| b.entity);
+    (blockers, candidates)
+}
+
+/// Everything needed to re-run the gameplay search with one entity removed.
+struct RepairSearch<'a> {
+    board: &'a Board,
+    from: Position,
+    goal: Goal,
+    collect_all: bool,
+    objective: bool,
+    max_ticks: u32,
+}
+
+impl RepairSearch<'_> {
+    fn evaluate(&self, candidates: &Candidates) -> RepairReport {
+        let mut single_removals: Vec<RepairCandidate> = candidates
+            .iter()
+            .take(MAX_REPAIR_CANDIDATES)
+            .filter_map(|(id, (kind, position))| {
+                let moves = search::gameplay(
+                    self.board,
+                    self.from,
+                    self.goal,
+                    self.collect_all,
+                    Some(*id),
+                )
+                .moves?;
+                let length = len_u32(moves.len());
+                (!self.objective || length <= self.max_ticks).then_some(RepairCandidate {
+                    remove: *id,
+                    kind: *kind,
+                    position: *position,
+                    resulting_path_length: length,
+                })
             })
-        })
-        .collect();
-    single_removals.sort_by_key(|c| (c.resulting_path_length, c.remove));
-    let evaluated = frontier.len().min(MAX_REPAIR_CANDIDATES);
-    let exhaustive = evaluated == frontier.len();
-    let note = match (single_removals.is_empty(), exhaustive) {
-        (false, _) => "Each listed removal was verified by re-running the gameplay search on the scene without that entity.".to_owned(),
-        (true, true) => "No single removal of a frontier wall or door makes the target reachable; at least two changes are needed (multi-entity repairs are not searched).".to_owned(),
-        (true, false) => format!(
-            "No verified single removal among the first {evaluated} of {} frontier blockers; the rest were not evaluated.",
-            frontier.len()
-        ),
-    };
-    RepairReport {
-        frontier_size: len_u32(frontier.len()),
-        evaluated: len_u32(evaluated),
-        exhaustive,
-        single_removals,
-        note,
+            .collect();
+        single_removals.sort_by_key(|c| (c.resulting_path_length, c.remove));
+        let evaluated = candidates.len().min(MAX_REPAIR_CANDIDATES);
+        let exhaustive = evaluated == candidates.len();
+        let note = match (single_removals.is_empty(), exhaustive) {
+            (false, _) => "Each listed removal was verified by re-running the gameplay search on the scene without that entity.".to_owned(),
+            (true, true) => format!(
+                "None of the {evaluated} entities whose single removal could matter makes the target reachable, so at least two changes are needed (multi-entity repairs are not searched)."
+            ),
+            (true, false) => format!(
+                "No verified single removal among the first {evaluated} of {} candidates; the rest were not evaluated.",
+                candidates.len()
+            ),
+        };
+        RepairReport {
+            candidates: len_u32(candidates.len()),
+            evaluated: len_u32(evaluated),
+            exhaustive,
+            single_removals,
+            note,
+        }
     }
 }
 
@@ -452,25 +541,38 @@ fn summarize(
         ),
         (None, _) => {
             let cause = if geometric.reachable {
-                let doors: Vec<String> = blockers
+                let causes: Vec<String> = blockers
                     .iter()
-                    .filter_map(|b| {
-                        b.kind.color().map(|color| {
-                            format!("door {} at {} needs the {color} key", b.entity, b.position)
-                        })
+                    .filter_map(|b| match (b.reason, b.kind.color()) {
+                        (BlockerReason::DoorKeyNotInScene, Some(color)) => Some(format!(
+                            "door {} at {} needs a {color} key, and the scene has none",
+                            b.entity, b.position
+                        )),
+                        (BlockerReason::DoorKeyUnobtainable, Some(color)) => Some(format!(
+                            "door {} at {} needs the {color} key, which cannot be reached",
+                            b.entity, b.position
+                        )),
+                        (BlockerReason::RequiredKeyUnobtainable, Some(color)) => Some(format!(
+                            "the required {color} key {} at {} cannot be reached",
+                            b.entity, b.position
+                        )),
+                        (BlockerReason::EpisodeEndingExit, _) => Some(format!(
+                            "stepping onto exit {} at {} wins and ends the episode first",
+                            b.entity, b.position
+                        )),
+                        _ => None,
                     })
                     .collect();
-                if doors.is_empty() {
-                    "the target is geometrically reachable, so locked doors are the obstacle"
-                        .to_owned()
+                if causes.is_empty() {
+                    "walls alone do not separate it, but the rules do".to_owned()
                 } else {
                     format!(
-                        "the target is geometrically reachable, so locked doors are the obstacle ({}), and those keys cannot be obtained",
-                        doors.join("; ")
+                        "walls alone do not separate it, but the rules do: {}",
+                        causes.join("; ")
                     )
                 }
             } else {
-                "it is not geometrically reachable either, so walls separate it from the start"
+                "it is not reachable even with every door open, so walls separate it from the start"
                     .to_owned()
             };
             let repair = match repairs.and_then(|r| r.single_removals.first().map(|c| (r, c))) {
@@ -580,7 +682,13 @@ mod tests {
         );
         assert!(!report.gameplay.reachable, "but the red key does not exist");
         assert_eq!(report.blockers[0].reason, BlockerReason::DoorKeyNotInScene);
-        assert!(report.summary.contains("locked doors"));
+        assert!(
+            report
+                .summary
+                .contains("needs a red key, and the scene has none"),
+            "{}",
+            report.summary
+        );
     }
 
     #[test]
@@ -616,6 +724,82 @@ mod tests {
                 .iter()
                 .any(|b| b.reason == BlockerReason::DoorKeyUnobtainable)
         );
+    }
+
+    /// Regression: the search used to walk through exits that end the episode, and then
+    /// "verified" a repair whose route could never be played.
+    #[test]
+    fn routes_cannot_continue_past_an_exit_that_ends_the_episode() {
+        let sealed = scene(&["@E#."], 50, WinCondition::ReachExit);
+        let report = reachability(&sealed, None, Some(Position::new(3, 0))).expect("runs");
+        assert_eq!(report.verdict, Verdict::Unreachable);
+        let repairs = report.repairs.expect("computed");
+        assert!(
+            repairs.single_removals.is_empty(),
+            "removing only the wall or only the exit is not enough: {:?}",
+            repairs.single_removals
+        );
+        assert!(repairs.exhaustive && repairs.note.contains("at least two changes"));
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|b| b.reason == BlockerReason::EpisodeEndingExit)
+        );
+
+        let open = scene(&["@E."], 50, WinCondition::ReachExit);
+        let report = reachability(&open, None, Some(Position::new(2, 0))).expect("runs");
+        assert_eq!(report.verdict, Verdict::Unreachable);
+        let removals = report.repairs.expect("computed").single_removals;
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].kind, EntityKind::Exit);
+        assert_eq!(removals[0].resulting_path_length, 2);
+        assert!(
+            report.summary.contains("ends the episode"),
+            "{}",
+            report.summary
+        );
+    }
+
+    /// Regression: a key behind a winning exit was reported as obtainable.
+    #[test]
+    fn a_key_behind_a_winning_exit_is_unobtainable() {
+        let report = validate(&scene(&["@Er"], 50, WinCondition::ReachExit));
+        assert!(report.playable);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == IssueCode::KeyUnobtainable)
+        );
+    }
+
+    /// Regression: an unreachable required key was blamed on (nonexistent) locked doors and
+    /// its removal, a valid single repair, was not considered.
+    #[test]
+    fn an_unreachable_required_key_is_named_and_its_removal_verified() {
+        let walled = scene(&["@E##b"], 50, WinCondition::CollectAllKeysThenExit);
+        let report = reachability(&walled, None, None).expect("runs");
+        assert_eq!(report.verdict, Verdict::Unsolvable);
+        assert!(
+            report.geometric.reachable,
+            "an exit is reachable; the rules are the problem"
+        );
+        assert!(
+            report.summary.contains("required blue key"),
+            "{}",
+            report.summary
+        );
+        assert!(!report.summary.contains("door"), "{}", report.summary);
+        let removals = report.repairs.expect("computed").single_removals;
+        assert_eq!(removals.len(), 1);
+        assert_eq!(
+            removals[0].kind,
+            EntityKind::Key {
+                color: KeyColor::Blue
+            }
+        );
+        assert_eq!(removals[0].resulting_path_length, 1);
     }
 
     #[test]

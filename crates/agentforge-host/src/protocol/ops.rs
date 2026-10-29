@@ -572,8 +572,12 @@ pub struct EpisodeObserved {
 pub struct ActArgs {
     /// The action.
     pub action: Action,
+    /// If given, the action is rejected (`stale_episode`) unless this is the active episode.
+    /// Episode ids are never reused (reset, start and restore all issue new ones).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_episode_id: Option<u64>,
     /// If given, the action is rejected (`stale_tick`) unless the episode is at this tick.
-    /// Recommended: it makes retries safe.
+    /// Together with `expected_episode_id` this makes retries exactly-once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_tick: Option<u32>,
     /// Include the new observation in the result (default true).
@@ -795,6 +799,9 @@ pub struct SnapshotRestored {
     pub snapshot: SnapshotInfo,
     /// The new revision (always greater than before the restore).
     pub revision: u64,
+    /// The restored episode under its new id, if the snapshot held one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_episode: Option<EpisodeBrief>,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -821,6 +828,8 @@ pub struct ReplayExported {
     pub outcome: Outcome,
     /// State hash at export time.
     pub final_hash: StateHash,
+    /// Identifies this recording (equal exactly for the same actions from the same scene).
+    pub fingerprint: StateHash,
     /// File written, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,

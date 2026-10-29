@@ -47,9 +47,6 @@ pub fn serve<R: BufRead, W: Write>(
                 },
             ),
             LineRead::Line => {
-                while matches!(buffer.last(), Some(b'\n' | b'\r')) {
-                    buffer.pop();
-                }
                 if buffer.iter().all(u8::is_ascii_whitespace) {
                     continue;
                 }
@@ -91,23 +88,39 @@ fn read_bounded_line<R: BufRead>(
     buffer: &mut Vec<u8>,
     limit: usize,
 ) -> io::Result<LineRead> {
-    let read = Read::take(&mut *input, limit as u64 + 1).read_until(b'\n', buffer)?;
+    // Up to `limit` content bytes plus a two-byte "\r\n" terminator.
+    let read = Read::take(&mut *input, limit as u64 + 2).read_until(b'\n', buffer)?;
     if read == 0 {
         return Ok(LineRead::Eof);
     }
-    if buffer.last() == Some(&b'\n') || buffer.len() <= limit {
-        return Ok(LineRead::Line);
+    let terminated = buffer.last() == Some(&b'\n');
+    if !terminated && read == limit + 2 {
+        // Over the limit and the line goes on: discard the rest of it.
+        discard_line(input)?;
+        return Ok(LineRead::TooLong);
     }
-    // Over the limit without a newline: discard the rest of the line.
+    if terminated {
+        buffer.pop();
+        if buffer.last() == Some(&b'\r') {
+            buffer.pop();
+        }
+    }
+    if buffer.len() > limit {
+        return Ok(LineRead::TooLong);
+    }
+    Ok(LineRead::Line)
+}
+
+fn discard_line<R: BufRead>(input: &mut R) -> io::Result<()> {
     loop {
         let available = input.fill_buf()?;
         if available.is_empty() {
-            break;
+            return Ok(());
         }
         match available.iter().position(|byte| *byte == b'\n') {
             Some(index) => {
                 input.consume(index + 1);
-                break;
+                return Ok(());
             }
             None => {
                 let length = available.len();
@@ -115,7 +128,6 @@ fn read_bounded_line<R: BufRead>(
             }
         }
     }
-    Ok(LineRead::TooLong)
 }
 
 #[cfg(test)]
@@ -150,6 +162,31 @@ mod tests {
         );
         assert_eq!(responses[1].request_id.as_deref(), Some("after"));
         assert_eq!(responses[1].status, ResponseStatus::Ok);
+    }
+
+    /// Regression: the limit excludes the line terminator, but a "\r\n" terminator used to
+    /// count one byte against it.
+    #[test]
+    fn the_limit_excludes_both_newline_styles() {
+        for terminator in [&b"\n"[..], &b"\r\n"[..]] {
+            let mut at_limit = vec![b' '; MAX_REQUEST_BYTES - 2];
+            at_limit.splice(0..0, *b"{}");
+            at_limit.extend_from_slice(terminator);
+            let responses = run(&at_limit);
+            assert_eq!(
+                responses[0].error.as_ref().map(|e| e.code),
+                Some(ErrorCode::InvalidEnvelope),
+                "a line of exactly the limit is read and parsed"
+            );
+
+            let mut over = vec![b' '; MAX_REQUEST_BYTES + 1];
+            over.extend_from_slice(terminator);
+            let responses = run(&over);
+            assert_eq!(
+                responses[0].error.as_ref().map(|e| e.code),
+                Some(ErrorCode::RequestTooLarge)
+            );
+        }
     }
 
     #[test]

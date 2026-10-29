@@ -75,6 +75,9 @@ struct Snapshot {
     label: Option<String>,
     captured_at_revision: u64,
     project: Option<Project>,
+    /// Where the captured project was loaded from or last saved to. Restored together with
+    /// the project, so a later `project.save` can never write it over another project's file.
+    project_path: Option<PathBuf>,
     episode: Option<ActiveEpisode>,
 }
 
