@@ -1,0 +1,16 @@
+[package]
+name = "agentforge-demo"
+description = "Scripted protocol clients (builder and player) that drive an AgentForge engine process over JSON Lines. Depends on no engine crate by design."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Deliberately no dependency on agentforge-core or agentforge-host: these clients
+# may only use the public wire protocol, exactly like an external agent would.
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

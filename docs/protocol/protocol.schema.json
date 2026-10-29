@@ -1,0 +1,4958 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentForge JSON Lines protocol",
+  "protocol_version": 1,
+  "request": {
+    "$ref": "#/$defs/RequestEnvelope"
+  },
+  "response": {
+    "$ref": "#/$defs/ResponseEnvelope"
+  },
+  "operations": {
+    "discover": {
+      "summary": "Describe the engine: game rules, conventions, limits, the operations this session may call (with examples) and error codes. Pass `operation` for one operation's full schemas.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/DiscoverArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/DiscoverResult"
+      },
+      "example": {
+        "request_id": "example-discover",
+        "protocol_version": 1,
+        "operation": "discover",
+        "arguments": {
+          "operation": "entity.create"
+        }
+      }
+    },
+    "session.status": {
+      "summary": "Report this session's role, revision, open project, active episode and snapshots.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/NoArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionStatus"
+      },
+      "example": {
+        "request_id": "example-session-status",
+        "protocol_version": 1,
+        "operation": "session.status",
+        "arguments": {}
+      }
+    },
+    "project.create": {
+      "summary": "Open a new, empty in-memory project (replacing any open project; unsaved changes are discarded).",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/ProjectCreateArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ProjectInfo"
+      },
+      "example": {
+        "request_id": "example-project-create",
+        "protocol_version": 1,
+        "operation": "project.create",
+        "arguments": {
+          "name": "demo",
+          "expected_revision": 0
+        }
+      }
+    },
+    "project.load": {
+      "summary": "Open a project file. Invalid or incompatible files are rejected without changing the session.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/ProjectLoadArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ProjectInfo"
+      },
+      "example": {
+        "request_id": "example-project-load",
+        "protocol_version": 1,
+        "operation": "project.load",
+        "arguments": {
+          "path": "fixtures/key_vault.agentforge.json",
+          "expected_revision": 0
+        }
+      }
+    },
+    "project.save": {
+      "summary": "Write the open project to a file atomically (temporary file, fsync, rename).",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/ProjectSaveArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ProjectSaved"
+      },
+      "example": {
+        "request_id": "example-project-save",
+        "protocol_version": 1,
+        "operation": "project.save",
+        "arguments": {
+          "path": "out/demo.agentforge.json",
+          "expected_revision": 2
+        }
+      }
+    },
+    "scene.create": {
+      "summary": "Create a scene from an ASCII layout or from width/height, with optional rules.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/SceneCreateArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/SceneView"
+      },
+      "example": {
+        "request_id": "example-scene-create",
+        "protocol_version": 1,
+        "operation": "scene.create",
+        "arguments": {
+          "name": "corridor",
+          "expected_revision": 1,
+          "layout": [
+            "#######",
+            "#@..#E#",
+            "#######"
+          ],
+          "rules": {
+            "max_ticks": 20,
+            "win_condition": "reach_exit"
+          }
+        }
+      }
+    },
+    "scene.get": {
+      "summary": "Return a scene with every entity (including labels), its rules, ASCII view and digest.",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/SceneRef"
+      },
+      "result": {
+        "$ref": "#/$defs/SceneView"
+      },
+      "example": {
+        "request_id": "example-scene-get",
+        "protocol_version": 1,
+        "operation": "scene.get",
+        "arguments": {
+          "scene": "corridor"
+        }
+      }
+    },
+    "scene.validate": {
+      "summary": "Check completeness (player, exit) and gameplay problems (unsolvable, too slow for max_ticks, unusable keys or doors).",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/SceneRef"
+      },
+      "result": {
+        "$ref": "#/$defs/ValidationReport"
+      },
+      "example": {
+        "request_id": "example-scene-validate",
+        "protocol_version": 1,
+        "operation": "scene.validate",
+        "arguments": {
+          "scene": "corridor"
+        }
+      }
+    },
+    "scene.apply_batch": {
+      "summary": "Apply create/update/remove/update_rules edits atomically: all succeed, or the scene and revision stay unchanged and the failing edit index is reported.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/ApplyBatchArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/BatchApplied"
+      },
+      "example": {
+        "request_id": "example-scene-apply_batch",
+        "protocol_version": 1,
+        "operation": "scene.apply_batch",
+        "arguments": {
+          "scene": "corridor",
+          "expected_revision": 2,
+          "edits": [
+            {
+              "op": "remove_entity",
+              "id": 12
+            },
+            {
+              "op": "create_entity",
+              "kind": {
+                "type": "key",
+                "color": "red"
+              },
+              "position": {
+                "x": 2,
+                "y": 1
+              },
+              "label": "bait"
+            },
+            {
+              "op": "update_rules",
+              "max_ticks": 30
+            }
+          ]
+        }
+      }
+    },
+    "scene.update_rules": {
+      "summary": "Change rule parameters (max_ticks, win_condition) of a scene.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/UpdateRulesArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/RulesUpdated"
+      },
+      "example": {
+        "request_id": "example-scene-update_rules",
+        "protocol_version": 1,
+        "operation": "scene.update_rules",
+        "arguments": {
+          "scene": "corridor",
+          "expected_revision": 3,
+          "rules": {
+            "win_condition": "collect_all_keys_then_exit"
+          }
+        }
+      }
+    },
+    "scene.render": {
+      "summary": "Render a scene as SVG (entity ids labelled) or ASCII, inline or to a file. For human inspection; no GUI needed.",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/RenderArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/Rendered"
+      },
+      "example": {
+        "request_id": "example-scene-render",
+        "protocol_version": 1,
+        "operation": "scene.render",
+        "arguments": {
+          "scene": "corridor",
+          "format": "svg",
+          "path": "out/corridor.svg"
+        }
+      }
+    },
+    "entity.create": {
+      "summary": "Create one entity; the engine assigns its id.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/EntityCreateArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EntityView"
+      },
+      "example": {
+        "request_id": "example-entity-create",
+        "protocol_version": 1,
+        "operation": "entity.create",
+        "arguments": {
+          "scene": "corridor",
+          "expected_revision": 2,
+          "kind": {
+            "type": "door",
+            "color": "red"
+          },
+          "position": {
+            "x": 3,
+            "y": 1
+          },
+          "label": "vault door"
+        }
+      }
+    },
+    "entity.get": {
+      "summary": "Return one entity, including its authoring label.",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/EntityRef"
+      },
+      "result": {
+        "$ref": "#/$defs/EntityView"
+      },
+      "example": {
+        "request_id": "example-entity-get",
+        "protocol_version": 1,
+        "operation": "entity.get",
+        "arguments": {
+          "scene": "corridor",
+          "id": 12
+        }
+      }
+    },
+    "entity.update": {
+      "summary": "Change an entity's kind, position and/or label (empty label clears it).",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/EntityUpdateArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EntityUpdated"
+      },
+      "example": {
+        "request_id": "example-entity-update",
+        "protocol_version": 1,
+        "operation": "entity.update",
+        "arguments": {
+          "scene": "corridor",
+          "expected_revision": 3,
+          "id": 12,
+          "position": {
+            "x": 2,
+            "y": 1
+          }
+        }
+      }
+    },
+    "entity.remove": {
+      "summary": "Remove an entity. Its id is never reused.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/EntityRemoveArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EntityRemoved"
+      },
+      "example": {
+        "request_id": "example-entity-remove",
+        "protocol_version": 1,
+        "operation": "entity.remove",
+        "arguments": {
+          "scene": "corridor",
+          "expected_revision": 4,
+          "id": 12
+        }
+      }
+    },
+    "analysis.reachability": {
+      "summary": "Answer whether a target (default: the win condition) is reachable from a start (default: the player spawn), separately for walls only (geometric) and under the full rules (gameplay); when it is not, list the blockers and verified single-removal repairs.",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/ReachabilityArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ReachabilityReport"
+      },
+      "example": {
+        "request_id": "example-analysis-reachability",
+        "protocol_version": 1,
+        "operation": "analysis.reachability",
+        "arguments": {
+          "scene": "corridor"
+        }
+      }
+    },
+    "episode.start": {
+      "summary": "Start a new episode (replacing the active one) on a frozen copy of a scene; later scene edits do not affect it.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/EpisodeStartArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EpisodeStarted"
+      },
+      "example": {
+        "request_id": "example-episode-start",
+        "protocol_version": 1,
+        "operation": "episode.start",
+        "arguments": {
+          "scene": "corridor"
+        }
+      }
+    },
+    "episode.reset": {
+      "summary": "Start a new episode from the active episode's frozen starting scene.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/NoArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EpisodeStarted"
+      },
+      "example": {
+        "request_id": "example-episode-reset",
+        "protocol_version": 1,
+        "operation": "episode.reset",
+        "arguments": {}
+      }
+    },
+    "episode.observe": {
+      "summary": "Return the player's observation of the active episode, including legal actions.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/NoArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EpisodeObserved"
+      },
+      "example": {
+        "request_id": "example-episode-observe",
+        "protocol_version": 1,
+        "operation": "episode.observe",
+        "arguments": {}
+      }
+    },
+    "episode.act": {
+      "summary": "Submit one action and advance exactly one tick. Rejected actions change nothing and explain why.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/ActArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ActResult"
+      },
+      "example": {
+        "request_id": "example-episode-act",
+        "protocol_version": 1,
+        "operation": "episode.act",
+        "arguments": {
+          "action": {
+            "type": "move",
+            "direction": "east"
+          },
+          "expected_tick": 0
+        }
+      }
+    },
+    "episode.events": {
+      "summary": "Return the most recent events of the active episode, optionally only after a tick.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/EventsArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/EventsResult"
+      },
+      "example": {
+        "request_id": "example-episode-events",
+        "protocol_version": 1,
+        "operation": "episode.events",
+        "arguments": {
+          "since_tick": 0,
+          "limit": 20
+        }
+      }
+    },
+    "episode.assert": {
+      "summary": "Evaluate assertions (outcome, position, keys, tick bound, event occurrence) against the active episode.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/AssertArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/AssertResult"
+      },
+      "example": {
+        "request_id": "example-episode-assert",
+        "protocol_version": 1,
+        "operation": "episode.assert",
+        "arguments": {
+          "assertions": [
+            {
+              "type": "outcome_is",
+              "status": "won"
+            },
+            {
+              "type": "tick_at_most",
+              "tick": 20
+            },
+            {
+              "type": "event_occurred",
+              "event": "key_collected"
+            }
+          ]
+        }
+      }
+    },
+    "snapshot.capture": {
+      "summary": "Capture the open project and active episode (simulation state only) in memory.",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/SnapshotCaptureArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/SnapshotInfo"
+      },
+      "example": {
+        "request_id": "example-snapshot-capture",
+        "protocol_version": 1,
+        "operation": "snapshot.capture",
+        "arguments": {
+          "label": "before-repair"
+        }
+      }
+    },
+    "snapshot.restore": {
+      "summary": "Restore a snapshot's project and episode. The revision still increases, so writes based on older revisions stay stale.",
+      "roles": [
+        "author"
+      ],
+      "mutates": true,
+      "arguments": {
+        "$ref": "#/$defs/SnapshotRestoreArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/SnapshotRestored"
+      },
+      "example": {
+        "request_id": "example-snapshot-restore",
+        "protocol_version": 1,
+        "operation": "snapshot.restore",
+        "arguments": {
+          "snapshot_id": 1,
+          "expected_revision": 5
+        }
+      }
+    },
+    "replay.export": {
+      "summary": "Export the active episode's replay: initial scene, accepted actions and per-tick hashes. Authors may pass a path; players write to the launcher's replay directory or receive it inline.",
+      "roles": [
+        "author",
+        "player"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/ReplayExportArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ReplayExported"
+      },
+      "example": {
+        "request_id": "example-replay-export",
+        "protocol_version": 1,
+        "operation": "replay.export",
+        "arguments": {
+          "path": "out/corridor.replay.json"
+        }
+      }
+    },
+    "replay.verify": {
+      "summary": "Re-execute a replay's recorded actions and compare every state hash and the outcome; optionally check it belongs to a scene of the open project.",
+      "roles": [
+        "author"
+      ],
+      "mutates": false,
+      "arguments": {
+        "$ref": "#/$defs/ReplayVerifyArgs"
+      },
+      "result": {
+        "$ref": "#/$defs/ReplayVerified"
+      },
+      "example": {
+        "request_id": "example-replay-verify",
+        "protocol_version": 1,
+        "operation": "replay.verify",
+        "arguments": {
+          "path": "out/corridor.replay.json",
+          "scene": "corridor"
+        }
+      }
+    }
+  },
+  "error_codes": [
+    {
+      "code": "malformed_json",
+      "meaning": "The line is not valid UTF-8 JSON."
+    },
+    {
+      "code": "invalid_envelope",
+      "meaning": "The JSON is not a valid request envelope (missing, mistyped or unknown top-level fields)."
+    },
+    {
+      "code": "unsupported_protocol_version",
+      "meaning": "protocol_version is not supported by this engine."
+    },
+    {
+      "code": "request_too_large",
+      "meaning": "The request line exceeds the size limit."
+    },
+    {
+      "code": "unknown_operation",
+      "meaning": "No operation has this name."
+    },
+    {
+      "code": "invalid_arguments",
+      "meaning": "Arguments do not match the operation's schema or are inconsistent."
+    },
+    {
+      "code": "permission_denied",
+      "meaning": "This session's role may not perform the operation."
+    },
+    {
+      "code": "no_project_open",
+      "meaning": "The operation needs an open project."
+    },
+    {
+      "code": "scene_not_found",
+      "meaning": "The project has no scene with this name."
+    },
+    {
+      "code": "scene_already_exists",
+      "meaning": "A scene with this name already exists."
+    },
+    {
+      "code": "entity_not_found",
+      "meaning": "The scene has no entity with this id."
+    },
+    {
+      "code": "invalid_name",
+      "meaning": "Names use 1-64 characters of a-z, 0-9, '_' or '-'."
+    },
+    {
+      "code": "invalid_layout",
+      "meaning": "The ASCII layout cannot be parsed."
+    },
+    {
+      "code": "invalid_grid_size",
+      "meaning": "Grid width and height must be between 1 and 64."
+    },
+    {
+      "code": "stale_revision",
+      "meaning": "expected_revision does not match the current revision; nothing was changed."
+    },
+    {
+      "code": "out_of_bounds",
+      "meaning": "A position (or move target) lies outside the grid."
+    },
+    {
+      "code": "cell_occupied",
+      "meaning": "The target cell already holds an entity."
+    },
+    {
+      "code": "duplicate_player",
+      "meaning": "A scene holds at most one player."
+    },
+    {
+      "code": "duplicate_key_color",
+      "meaning": "A scene holds at most one key per color."
+    },
+    {
+      "code": "invalid_label",
+      "meaning": "Labels are 1-64 characters without control characters."
+    },
+    {
+      "code": "invalid_rules",
+      "meaning": "A rule parameter is out of range."
+    },
+    {
+      "code": "scene_not_playable",
+      "meaning": "The scene lacks a player or an exit, so no episode can start."
+    },
+    {
+      "code": "no_active_episode",
+      "meaning": "The operation needs a started episode."
+    },
+    {
+      "code": "episode_finished",
+      "meaning": "The episode already ended; start or reset one."
+    },
+    {
+      "code": "stale_tick",
+      "meaning": "expected_tick does not match the episode's tick; the action was not applied."
+    },
+    {
+      "code": "move_blocked",
+      "meaning": "A wall occupies the move target."
+    },
+    {
+      "code": "door_locked",
+      "meaning": "The move target is a door whose key the player does not hold."
+    },
+    {
+      "code": "snapshot_not_found",
+      "meaning": "No snapshot has this id in this session."
+    },
+    {
+      "code": "limit_exceeded",
+      "meaning": "A documented limit (batch size, snapshot count, ...) would be exceeded."
+    },
+    {
+      "code": "storage_error",
+      "meaning": "A file could not be read or written."
+    },
+    {
+      "code": "invalid_project_file",
+      "meaning": "The project file is malformed or violates scene invariants."
+    },
+    {
+      "code": "invalid_replay",
+      "meaning": "The replay file is malformed or its scene is invalid."
+    },
+    {
+      "code": "incompatible_version",
+      "meaning": "A file uses a format or hash version this engine does not support."
+    },
+    {
+      "code": "internal_error",
+      "meaning": "Engine bug. State changes commit only after a handler completes, so the request had no effect."
+    }
+  ],
+  "$defs": {
+    "RequestEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "Client-chosen correlation id (1-128 characters), echoed in the response."
+        },
+        "protocol_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Must be one of the supported protocol versions."
+        },
+        "operation": {
+          "type": "string",
+          "description": "Operation name, e.g. `entity.create`. See `discover`."
+        },
+        "arguments": {
+          "description": "Operation arguments; may be omitted for operations without arguments.",
+          "default": null
+        }
+      },
+      "required": [
+        "request_id",
+        "protocol_version",
+        "operation"
+      ],
+      "description": "One request line."
+    },
+    "ResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The request's `request_id`, or null if it could not be read."
+        },
+        "protocol_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Protocol version of this response."
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The request's operation name, when it could be read."
+        },
+        "status": {
+          "$ref": "#/$defs/ResponseStatus",
+          "description": "`ok` or `error`."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Session revision after handling the request. It increases with every accepted\nauthoring mutation (including snapshot restores) and never decreases."
+        },
+        "result": {
+          "description": "Typed result (see the operation's result schema). Present when `status` is `ok`."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when `status` is `error`."
+        }
+      },
+      "required": [
+        "protocol_version",
+        "status",
+        "revision"
+      ],
+      "description": "One response line."
+    },
+    "ResponseStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "ok",
+          "description": "`result` is present."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "`error` is present."
+        }
+      ],
+      "description": "Whether a request succeeded."
+    },
+    "ErrorBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "Stable machine-readable code."
+        },
+        "message": {
+          "type": "string",
+          "description": "Concise explanation."
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Relevant ids, fields and values."
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Suggested recovery, when one is known."
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "description": "A structured error."
+    },
+    "ErrorCode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "malformed_json",
+          "description": "The line is not valid UTF-8 JSON."
+        },
+        {
+          "type": "string",
+          "const": "invalid_envelope",
+          "description": "The JSON is not a valid request envelope (missing, mistyped or unknown top-level fields)."
+        },
+        {
+          "type": "string",
+          "const": "unsupported_protocol_version",
+          "description": "protocol_version is not supported by this engine."
+        },
+        {
+          "type": "string",
+          "const": "request_too_large",
+          "description": "The request line exceeds the size limit."
+        },
+        {
+          "type": "string",
+          "const": "unknown_operation",
+          "description": "No operation has this name."
+        },
+        {
+          "type": "string",
+          "const": "invalid_arguments",
+          "description": "Arguments do not match the operation's schema or are inconsistent."
+        },
+        {
+          "type": "string",
+          "const": "permission_denied",
+          "description": "This session's role may not perform the operation."
+        },
+        {
+          "type": "string",
+          "const": "no_project_open",
+          "description": "The operation needs an open project."
+        },
+        {
+          "type": "string",
+          "const": "scene_not_found",
+          "description": "The project has no scene with this name."
+        },
+        {
+          "type": "string",
+          "const": "scene_already_exists",
+          "description": "A scene with this name already exists."
+        },
+        {
+          "type": "string",
+          "const": "entity_not_found",
+          "description": "The scene has no entity with this id."
+        },
+        {
+          "type": "string",
+          "const": "invalid_name",
+          "description": "Names use 1-64 characters of a-z, 0-9, '_' or '-'."
+        },
+        {
+          "type": "string",
+          "const": "invalid_layout",
+          "description": "The ASCII layout cannot be parsed."
+        },
+        {
+          "type": "string",
+          "const": "invalid_grid_size",
+          "description": "Grid width and height must be between 1 and 64."
+        },
+        {
+          "type": "string",
+          "const": "stale_revision",
+          "description": "expected_revision does not match the current revision; nothing was changed."
+        },
+        {
+          "type": "string",
+          "const": "out_of_bounds",
+          "description": "A position (or move target) lies outside the grid."
+        },
+        {
+          "type": "string",
+          "const": "cell_occupied",
+          "description": "The target cell already holds an entity."
+        },
+        {
+          "type": "string",
+          "const": "duplicate_player",
+          "description": "A scene holds at most one player."
+        },
+        {
+          "type": "string",
+          "const": "duplicate_key_color",
+          "description": "A scene holds at most one key per color."
+        },
+        {
+          "type": "string",
+          "const": "invalid_label",
+          "description": "Labels are 1-64 characters without control characters."
+        },
+        {
+          "type": "string",
+          "const": "invalid_rules",
+          "description": "A rule parameter is out of range."
+        },
+        {
+          "type": "string",
+          "const": "scene_not_playable",
+          "description": "The scene lacks a player or an exit, so no episode can start."
+        },
+        {
+          "type": "string",
+          "const": "no_active_episode",
+          "description": "The operation needs a started episode."
+        },
+        {
+          "type": "string",
+          "const": "episode_finished",
+          "description": "The episode already ended; start or reset one."
+        },
+        {
+          "type": "string",
+          "const": "stale_tick",
+          "description": "expected_tick does not match the episode's tick; the action was not applied."
+        },
+        {
+          "type": "string",
+          "const": "move_blocked",
+          "description": "A wall occupies the move target."
+        },
+        {
+          "type": "string",
+          "const": "door_locked",
+          "description": "The move target is a door whose key the player does not hold."
+        },
+        {
+          "type": "string",
+          "const": "snapshot_not_found",
+          "description": "No snapshot has this id in this session."
+        },
+        {
+          "type": "string",
+          "const": "limit_exceeded",
+          "description": "A documented limit (batch size, snapshot count, ...) would be exceeded."
+        },
+        {
+          "type": "string",
+          "const": "storage_error",
+          "description": "A file could not be read or written."
+        },
+        {
+          "type": "string",
+          "const": "invalid_project_file",
+          "description": "The project file is malformed or violates scene invariants."
+        },
+        {
+          "type": "string",
+          "const": "invalid_replay",
+          "description": "The replay file is malformed or its scene is invalid."
+        },
+        {
+          "type": "string",
+          "const": "incompatible_version",
+          "description": "A file uses a format or hash version this engine does not support."
+        },
+        {
+          "type": "string",
+          "const": "internal_error",
+          "description": "Engine bug. State changes commit only after a handler completes, so the request had no effect."
+        }
+      ],
+      "description": "Stable error codes. Codes are never renamed within a protocol version."
+    },
+    "DiscoverArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Describe only this operation, including its argument and result schemas."
+        },
+        "include_schemas": {
+          "type": "boolean",
+          "description": "Include argument and result schemas for every listed operation.",
+          "default": false
+        }
+      },
+      "description": "Arguments of `discover`."
+    },
+    "DiscoverResult": {
+      "type": "object",
+      "properties": {
+        "engine": {
+          "$ref": "#/$defs/EngineInfo",
+          "description": "Engine identity."
+        },
+        "protocol_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Protocol version of this response."
+        },
+        "supported_protocol_versions": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "description": "Accepted protocol versions."
+        },
+        "role": {
+          "$ref": "#/$defs/Role",
+          "description": "This session's role (fixed by the launcher)."
+        },
+        "role_capabilities": {
+          "type": "string",
+          "description": "What this role may do, in plain language."
+        },
+        "game": {
+          "$ref": "#/$defs/GameModel",
+          "description": "Rules of the simulated game."
+        },
+        "conventions": {
+          "$ref": "#/$defs/Conventions",
+          "description": "Cross-cutting protocol conventions."
+        },
+        "constraints": {
+          "$ref": "#/$defs/Constraints",
+          "description": "Numeric limits."
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OperationInfo"
+          },
+          "description": "Operations this session may call (only those; nothing else is advertised)."
+        },
+        "error_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ErrorCodeInfo"
+          },
+          "description": "Every error code and its meaning."
+        }
+      },
+      "required": [
+        "engine",
+        "protocol_version",
+        "supported_protocol_versions",
+        "role",
+        "role_capabilities",
+        "game",
+        "conventions",
+        "constraints",
+        "operations",
+        "error_codes"
+      ],
+      "description": "Result of `discover`."
+    },
+    "EngineInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Engine name (a temporary working name)."
+        },
+        "version": {
+          "type": "string",
+          "description": "Engine version."
+        },
+        "state_hash_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Canonical hash encoding version."
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "state_hash_version"
+      ],
+      "description": "Engine identity."
+    },
+    "Role": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "author",
+          "description": "Trusted: may create, inspect and modify projects, scenes and entities, run analysis,\nsnapshots and replay verification, and also play episodes."
+        },
+        {
+          "type": "string",
+          "const": "player",
+          "description": "Restricted: may only play episodes of the scene the launcher chose, observe them and\nexport their replays. Cannot change rules, spawn entities, set state or restore."
+        }
+      ],
+      "description": "Capability of a session, fixed by the launcher when the session is created."
+    },
+    "GameModel": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "One-paragraph overview."
+        },
+        "observability": {
+          "type": "string",
+          "description": "Observability guarantee."
+        },
+        "timing": {
+          "type": "string",
+          "description": "How time advances."
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate convention."
+        },
+        "entity_kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityKindInfo"
+          },
+          "description": "Entity kinds and their behaviour."
+        },
+        "key_colors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyColor"
+          },
+          "description": "Supported key/door colors."
+        },
+        "win_conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NamedDescription"
+          },
+          "description": "Supported win conditions."
+        },
+        "failure_conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NamedDescription"
+          },
+          "description": "How an episode can fail."
+        },
+        "tick_resolution_order": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Order of resolution within one tick."
+        },
+        "ascii_legend": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LegendEntry"
+          },
+          "description": "ASCII glyphs used by layouts and observations."
+        }
+      },
+      "required": [
+        "summary",
+        "observability",
+        "timing",
+        "coordinates",
+        "entity_kinds",
+        "key_colors",
+        "win_conditions",
+        "failure_conditions",
+        "tick_resolution_order",
+        "ascii_legend"
+      ],
+      "description": "The game model, as data."
+    },
+    "EntityKindInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "The kind's `type` tag."
+        },
+        "example": {
+          "$ref": "#/$defs/EntityKind",
+          "description": "Example `kind` object."
+        },
+        "description": {
+          "type": "string",
+          "description": "Behaviour."
+        }
+      },
+      "required": [
+        "kind",
+        "example",
+        "description"
+      ],
+      "description": "One entity kind."
+    },
+    "EntityKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "player"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "The player's spawn point. A scene has at most one."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "wall"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Impassable."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "key"
+            },
+            "color": {
+              "$ref": "#/$defs/KeyColor",
+              "description": "Doors of this color open for a player holding this key."
+            }
+          },
+          "required": [
+            "type",
+            "color"
+          ],
+          "description": "Collected by stepping onto it; never consumed."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "door"
+            },
+            "color": {
+              "$ref": "#/$defs/KeyColor",
+              "description": "The key color that opens this door."
+            }
+          },
+          "required": [
+            "type",
+            "color"
+          ],
+          "description": "Passable only while the player holds the key of the same color."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "exit"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Winning target, subject to the scene's win condition."
+        }
+      ],
+      "description": "What an entity is. Serialized with a `type` tag, e.g. `{\"type\": \"door\", \"color\": \"red\"}`."
+    },
+    "KeyColor": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "red",
+          "description": "ASCII glyphs: key `r`, door `R`."
+        },
+        {
+          "type": "string",
+          "const": "green",
+          "description": "ASCII glyphs: key `g`, door `G`."
+        },
+        {
+          "type": "string",
+          "const": "blue",
+          "description": "ASCII glyphs: key `b`, door `B`."
+        },
+        {
+          "type": "string",
+          "const": "yellow",
+          "description": "ASCII glyphs: key `y`, door `Y`."
+        },
+        {
+          "type": "string",
+          "const": "purple",
+          "description": "ASCII glyphs: key `p`, door `P`."
+        },
+        {
+          "type": "string",
+          "const": "orange",
+          "description": "ASCII glyphs: key `o`, door `O`."
+        },
+        {
+          "type": "string",
+          "const": "cyan",
+          "description": "ASCII glyphs: key `c`, door `C`."
+        },
+        {
+          "type": "string",
+          "const": "white",
+          "description": "ASCII glyphs: key `w`, door `W`."
+        }
+      ],
+      "description": "Color shared by a key and the doors it opens. A scene holds at most one key per color."
+    },
+    "NamedDescription": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Wire name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Meaning."
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "description": "A named thing with a description."
+    },
+    "LegendEntry": {
+      "type": "object",
+      "properties": {
+        "glyph": {
+          "type": "string",
+          "description": "The glyph."
+        },
+        "meaning": {
+          "type": "string",
+          "description": "What it denotes."
+        }
+      },
+      "required": [
+        "glyph",
+        "meaning"
+      ],
+      "description": "One legend row, as published by `discover` and observations."
+    },
+    "Conventions": {
+      "type": "object",
+      "properties": {
+        "framing": {
+          "type": "string",
+          "description": "Request/response framing."
+        },
+        "roles": {
+          "type": "string",
+          "description": "Roles and permissions."
+        },
+        "revisions": {
+          "type": "string",
+          "description": "Revision and optimistic concurrency rules."
+        },
+        "retries": {
+          "type": "string",
+          "description": "Retry semantics."
+        },
+        "determinism": {
+          "type": "string",
+          "description": "Determinism scope."
+        },
+        "episodes": {
+          "type": "string",
+          "description": "Editor/play separation."
+        }
+      },
+      "required": [
+        "framing",
+        "roles",
+        "revisions",
+        "retries",
+        "determinism",
+        "episodes"
+      ],
+      "description": "Cross-cutting conventions."
+    },
+    "Constraints": {
+      "type": "object",
+      "properties": {
+        "max_grid_width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Largest grid width."
+        },
+        "max_grid_height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Largest grid height."
+        },
+        "max_ticks_limit": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Largest `max_ticks`."
+        },
+        "max_entities_per_cell": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Entities per cell."
+        },
+        "max_players_per_scene": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Players per scene."
+        },
+        "max_keys_per_color": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Keys per color per scene."
+        },
+        "key_color_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of key colors."
+        },
+        "max_request_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Largest request line in bytes."
+        },
+        "max_request_id_chars": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Longest `request_id`."
+        },
+        "max_batch_edits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most edits per batch."
+        },
+        "max_label_chars": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Longest entity or snapshot label."
+        },
+        "max_name_chars": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Longest project or scene name."
+        },
+        "max_snapshots": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most snapshots per session."
+        },
+        "max_events_per_query": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most events per `episode.events` call."
+        },
+        "max_assertions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most assertions per `episode.assert` call."
+        },
+        "max_repair_candidates": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most repair candidates verified per reachability query."
+        }
+      },
+      "required": [
+        "max_grid_width",
+        "max_grid_height",
+        "max_ticks_limit",
+        "max_entities_per_cell",
+        "max_players_per_scene",
+        "max_keys_per_color",
+        "key_color_count",
+        "max_request_bytes",
+        "max_request_id_chars",
+        "max_batch_edits",
+        "max_label_chars",
+        "max_name_chars",
+        "max_snapshots",
+        "max_events_per_query",
+        "max_assertions",
+        "max_repair_candidates"
+      ],
+      "description": "Numeric limits."
+    },
+    "OperationInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Operation name."
+        },
+        "summary": {
+          "type": "string",
+          "description": "What it does."
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "description": "Roles allowed to call it."
+        },
+        "mutates": {
+          "type": "boolean",
+          "description": "Whether it changes the session revision when accepted."
+        },
+        "example": {
+          "description": "A complete example request line."
+        },
+        "arguments_schema": {
+          "description": "JSON Schema of `arguments`, when requested."
+        },
+        "result_schema": {
+          "description": "JSON Schema of `result`, when requested."
+        }
+      },
+      "required": [
+        "name",
+        "summary",
+        "roles",
+        "mutates",
+        "example"
+      ],
+      "description": "One operation in `discover`."
+    },
+    "ErrorCodeInfo": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "The code."
+        },
+        "meaning": {
+          "type": "string",
+          "description": "Its meaning."
+        }
+      },
+      "required": [
+        "code",
+        "meaning"
+      ],
+      "description": "One error code in `discover`."
+    },
+    "NoArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Arguments of operations that take none."
+    },
+    "SessionStatus": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/Role",
+          "description": "This session's role."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Current revision."
+        },
+        "bound_scene": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For player sessions: the only scene they may play."
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The open project."
+        },
+        "episode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpisodeBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The active episode."
+        },
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SnapshotInfo"
+          },
+          "description": "Snapshots captured in this session."
+        }
+      },
+      "required": [
+        "role",
+        "revision",
+        "snapshots"
+      ],
+      "description": "Result of `session.status`."
+    },
+    "ProjectInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where it was loaded from or last saved to."
+        },
+        "dirty": {
+          "type": "boolean",
+          "description": "Whether it has changes not yet saved."
+        },
+        "scenes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Scene names."
+        }
+      },
+      "required": [
+        "name",
+        "dirty",
+        "scenes"
+      ],
+      "description": "Summary of the open project."
+    },
+    "EpisodeBrief": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Episode id."
+        },
+        "scene": {
+          "type": "string",
+          "description": "Scene being played."
+        },
+        "scene_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Revision of the scene content it started from."
+        },
+        "tick": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Current tick."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Result so far."
+        },
+        "state_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "Current state hash."
+        }
+      },
+      "required": [
+        "episode_id",
+        "scene",
+        "scene_revision",
+        "tick",
+        "outcome",
+        "state_hash"
+      ],
+      "description": "Summary of an episode."
+    },
+    "Outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "in_progress"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "description": "Still running."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "won"
+            },
+            "tick": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Tick at which the episode was won."
+            }
+          },
+          "required": [
+            "status",
+            "tick"
+          ],
+          "description": "The win condition was met."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            },
+            "tick": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Tick at which the episode failed."
+            },
+            "reason": {
+              "$ref": "#/$defs/FailureReason",
+              "description": "Why it failed."
+            }
+          },
+          "required": [
+            "status",
+            "tick",
+            "reason"
+          ],
+          "description": "The episode ended without a win."
+        }
+      ],
+      "description": "State of an episode's result. Serialized with a `status` tag."
+    },
+    "FailureReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "max_ticks_reached",
+          "description": "`max_ticks` elapsed without a win."
+        },
+        {
+          "type": "string",
+          "const": "forfeited",
+          "description": "The player forfeited."
+        }
+      ],
+      "description": "Why an episode failed."
+    },
+    "StateHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "SHA-256 of the canonical state encoding (see docs/ARCHITECTURE.md)."
+    },
+    "SnapshotInfo": {
+      "type": "object",
+      "properties": {
+        "snapshot_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Snapshot id."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional note."
+        },
+        "captured_at_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Revision when captured (metadata; restoring never rewinds the revision)."
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Project captured, if one was open."
+        },
+        "scene_digests": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/StateHash"
+          },
+          "description": "Digest of every scene captured."
+        },
+        "episode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpisodeBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Episode captured, if one was active."
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "captured_at_revision",
+        "scene_digests"
+      ],
+      "description": "A captured snapshot."
+    },
+    "ProjectCreateArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        }
+      },
+      "required": [
+        "name",
+        "expected_revision"
+      ],
+      "description": "Arguments of `project.create`."
+    },
+    "ProjectLoadArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path of a project file."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        }
+      },
+      "required": [
+        "path",
+        "expected_revision"
+      ],
+      "description": "Arguments of `project.load`."
+    },
+    "ProjectSaveArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Destination; defaults to the path the project was loaded from or last saved to."
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "If given, the save is rejected unless it equals the current revision."
+        }
+      },
+      "description": "Arguments of `project.save`."
+    },
+    "ProjectSaved": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File written (atomically)."
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Bytes written."
+        },
+        "scenes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Scenes saved."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Revision whose content was saved."
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "scenes",
+        "revision"
+      ],
+      "description": "Result of `project.save`."
+    },
+    "SceneCreateArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Grid width; required without `layout`, must match it otherwise."
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Grid height; required without `layout`, must match it otherwise."
+        },
+        "layout": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "ASCII rows (see the legend in `discover`). Entities are created row by row, left to\nright, and receive ids in that order."
+        },
+        "rules": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rules"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Rule parameters; defaults to `{\"max_ticks\":100,\"win_condition\":\"reach_exit\"}`."
+        }
+      },
+      "required": [
+        "name",
+        "expected_revision"
+      ],
+      "description": "Arguments of `scene.create`."
+    },
+    "Rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_ticks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The episode fails with `max_ticks_reached` once this many ticks elapse without a win.\nA win on the final tick still counts. Range: `1..=10000`."
+        },
+        "win_condition": {
+          "$ref": "#/$defs/WinCondition",
+          "description": "What the player must achieve to win."
+        }
+      },
+      "required": [
+        "max_ticks",
+        "win_condition"
+      ],
+      "description": "Rule parameters of a scene."
+    },
+    "WinCondition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "reach_exit",
+          "description": "Step onto any exit."
+        },
+        {
+          "type": "string",
+          "const": "collect_all_keys_then_exit",
+          "description": "Collect every key in the scene, then step onto an exit."
+        }
+      ],
+      "description": "What a player must achieve to win an episode."
+    },
+    "SceneView": {
+      "type": "object",
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "size": {
+          "$ref": "#/$defs/GridSize",
+          "description": "Grid dimensions."
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules",
+          "description": "Rule parameters."
+        },
+        "next_entity_id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "ID allocator state."
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Entity"
+          },
+          "description": "Entities in ascending id order, with labels."
+        },
+        "ascii": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The scene as text rows (player shown at its spawn)."
+        },
+        "digest": {
+          "$ref": "#/$defs/StateHash",
+          "description": "Canonical digest of the scene's simulation content."
+        }
+      },
+      "required": [
+        "scene",
+        "size",
+        "rules",
+        "next_entity_id",
+        "entities",
+        "ascii",
+        "digest"
+      ],
+      "description": "A scene with everything an author may see."
+    },
+    "GridSize": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of columns."
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of rows."
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "description": "Grid dimensions in cells."
+    },
+    "Entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/EntityId",
+          "description": "Stable identifier, unique within the scene's history."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntityKind",
+          "description": "What the entity is."
+        },
+        "position": {
+          "$ref": "#/$defs/Position",
+          "description": "The cell it occupies."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional authoring note. Never shown to players and never part of state hashes."
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "position"
+      ],
+      "description": "An entity placed on the grid."
+    },
+    "EntityId": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "description": "Stable identifier of an entity within one scene.\n\nIdentifiers are handed out in strictly increasing order by the scene's [`IdAllocator`]\nand are never reused, even after the entity is removed. An ID quoted in a diagnostic,\nevent or replay therefore denotes exactly one entity in that scene's history."
+    },
+    "Position": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Column, growing east."
+        },
+        "y": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Row, growing south."
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "description": "A cell coordinate. `x` grows east, `y` grows south, `(0, 0)` is the north-west corner.\n\nCoordinates are signed so that out-of-range requests deserialize and can be rejected\nwith a precise `out_of_bounds` error instead of an opaque type error."
+    },
+    "SceneRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        }
+      },
+      "required": [
+        "scene"
+      ],
+      "description": "Arguments naming a scene."
+    },
+    "ValidationReport": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean",
+          "description": "No errors: an episode can start."
+        },
+        "playable": {
+          "type": "boolean",
+          "description": "Valid and winnable within `max_ticks`."
+        },
+        "shortest_solution_length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Length of the shortest winning move sequence, ignoring `max_ticks`."
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Issue"
+          },
+          "description": "Findings, errors first."
+        }
+      },
+      "required": [
+        "valid",
+        "playable",
+        "issues"
+      ],
+      "description": "Result of [`validate`]."
+    },
+    "Issue": {
+      "type": "object",
+      "properties": {
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "description": "Error or warning."
+        },
+        "code": {
+          "$ref": "#/$defs/IssueCode",
+          "description": "Stable identifier."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human- and model-readable explanation."
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityId"
+          },
+          "description": "Entities involved."
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Cell involved."
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Suggested next step."
+        }
+      },
+      "required": [
+        "severity",
+        "code",
+        "message",
+        "entities"
+      ],
+      "description": "One validation finding."
+    },
+    "Severity": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "error",
+          "description": "Prevents starting an episode."
+        },
+        {
+          "type": "string",
+          "const": "warning",
+          "description": "The scene can be played but has a problem (for example, it cannot be won)."
+        }
+      ],
+      "description": "How serious an issue is."
+    },
+    "IssueCode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "missing_player",
+          "description": "No player spawn."
+        },
+        {
+          "type": "string",
+          "const": "missing_exit",
+          "description": "No exit."
+        },
+        {
+          "type": "string",
+          "const": "objective_unreachable",
+          "description": "No gameplay path from the spawn satisfies the win condition."
+        },
+        {
+          "type": "string",
+          "const": "exceeds_max_ticks",
+          "description": "The objective is reachable, but not within `max_ticks`."
+        },
+        {
+          "type": "string",
+          "const": "door_without_key",
+          "description": "A door whose key color does not exist in the scene."
+        },
+        {
+          "type": "string",
+          "const": "key_unobtainable",
+          "description": "A key the player can never pick up."
+        }
+      ],
+      "description": "Stable machine-readable issue identifiers."
+    },
+    "ApplyBatchArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        },
+        "edits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SceneEdit"
+          },
+          "description": "Edits applied in order; all succeed or none is applied."
+        }
+      },
+      "required": [
+        "scene",
+        "expected_revision",
+        "edits"
+      ],
+      "description": "Arguments of `scene.apply_batch`."
+    },
+    "SceneEdit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "create_entity"
+            },
+            "kind": {
+              "$ref": "#/$defs/EntityKind",
+              "description": "What to create."
+            },
+            "position": {
+              "$ref": "#/$defs/Position",
+              "description": "Where to place it."
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Optional authoring note (empty string means none)."
+            }
+          },
+          "required": [
+            "op",
+            "kind",
+            "position"
+          ],
+          "description": "Create an entity; the engine assigns its id."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "update_entity"
+            },
+            "id": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The entity to change."
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EntityKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New kind."
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Position"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New position."
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "New label; an empty string clears it."
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "description": "Change an entity's kind, position and/or label. At least one field is required."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "remove_entity"
+            },
+            "id": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The entity to remove."
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "description": "Remove an entity. Its id is never reused."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "update_rules"
+            },
+            "max_ticks": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "New `max_ticks`."
+            },
+            "win_condition": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WinCondition"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New win condition."
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "description": "Change rule parameters. At least one field is required."
+        }
+      ],
+      "description": "One authoring edit. Batches apply atomically through [`Scene::apply_edits`]."
+    },
+    "BatchApplied": {
+      "type": "object",
+      "properties": {
+        "applied": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of edits applied."
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EditEffect"
+          },
+          "description": "One effect per edit, in order."
+        }
+      },
+      "required": [
+        "applied",
+        "effects"
+      ],
+      "description": "Result of `scene.apply_batch`."
+    },
+    "EditEffect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "effect": {
+              "type": "string",
+              "const": "created"
+            },
+            "entity": {
+              "$ref": "#/$defs/Entity",
+              "description": "The new entity, including its assigned id."
+            }
+          },
+          "required": [
+            "effect",
+            "entity"
+          ],
+          "description": "An entity was created."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "effect": {
+              "type": "string",
+              "const": "updated"
+            },
+            "before": {
+              "$ref": "#/$defs/Entity",
+              "description": "State before the edit."
+            },
+            "after": {
+              "$ref": "#/$defs/Entity",
+              "description": "State after the edit."
+            }
+          },
+          "required": [
+            "effect",
+            "before",
+            "after"
+          ],
+          "description": "An entity was changed."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "effect": {
+              "type": "string",
+              "const": "removed"
+            },
+            "entity": {
+              "$ref": "#/$defs/Entity",
+              "description": "The removed entity."
+            }
+          },
+          "required": [
+            "effect",
+            "entity"
+          ],
+          "description": "An entity was removed."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "effect": {
+              "type": "string",
+              "const": "rules_updated"
+            },
+            "before": {
+              "$ref": "#/$defs/Rules",
+              "description": "Rules before the edit."
+            },
+            "after": {
+              "$ref": "#/$defs/Rules",
+              "description": "Rules after the edit."
+            }
+          },
+          "required": [
+            "effect",
+            "before",
+            "after"
+          ],
+          "description": "Rules were changed."
+        }
+      ],
+      "description": "What an accepted edit did."
+    },
+    "UpdateRulesArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        },
+        "rules": {
+          "$ref": "#/$defs/RulesPatch",
+          "description": "Fields to change."
+        }
+      },
+      "required": [
+        "scene",
+        "expected_revision",
+        "rules"
+      ],
+      "description": "Arguments of `scene.update_rules`."
+    },
+    "RulesPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_ticks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "New `max_ticks`, if changing."
+        },
+        "win_condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WinCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "New win condition, if changing."
+        }
+      },
+      "description": "Partial update of [`Rules`]; absent fields keep their current values."
+    },
+    "RulesUpdated": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/Rules",
+          "description": "Rules before."
+        },
+        "after": {
+          "$ref": "#/$defs/Rules",
+          "description": "Rules after."
+        }
+      },
+      "required": [
+        "before",
+        "after"
+      ],
+      "description": "Result of `scene.update_rules`."
+    },
+    "RenderArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "format": {
+          "$ref": "#/$defs/RenderFormat",
+          "description": "Output format (default `svg`).",
+          "default": "svg"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "If given, write the output to this file (atomically) instead of returning it."
+        }
+      },
+      "required": [
+        "scene"
+      ],
+      "description": "Arguments of `scene.render`."
+    },
+    "RenderFormat": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "svg",
+          "description": "SVG document."
+        },
+        {
+          "type": "string",
+          "const": "ascii",
+          "description": "ASCII rows joined by newlines."
+        }
+      ],
+      "description": "Output formats of `scene.render`."
+    },
+    "Rendered": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/RenderFormat",
+          "description": "Output format."
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Size of the output."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "File written, when `path` was given."
+        },
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The output, when no `path` was given."
+        }
+      },
+      "required": [
+        "format",
+        "bytes"
+      ],
+      "description": "Result of `scene.render`."
+    },
+    "EntityCreateArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntityKind",
+          "description": "What to create."
+        },
+        "position": {
+          "$ref": "#/$defs/Position",
+          "description": "Where."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional authoring note (never shown to players)."
+        }
+      },
+      "required": [
+        "scene",
+        "expected_revision",
+        "kind",
+        "position"
+      ],
+      "description": "Arguments of `entity.create`."
+    },
+    "EntityView": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/Entity",
+          "description": "The entity."
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "description": "Result of `entity.create` and `entity.get`."
+    },
+    "EntityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "id": {
+          "$ref": "#/$defs/EntityId",
+          "description": "Entity id."
+        }
+      },
+      "required": [
+        "scene",
+        "id"
+      ],
+      "description": "Arguments of `entity.get`."
+    },
+    "EntityUpdateArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        },
+        "id": {
+          "$ref": "#/$defs/EntityId",
+          "description": "Entity id."
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "New kind."
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "New position."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "New label; an empty string clears it."
+        }
+      },
+      "required": [
+        "scene",
+        "expected_revision",
+        "id"
+      ],
+      "description": "Arguments of `entity.update`."
+    },
+    "EntityUpdated": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/Entity",
+          "description": "Before the update."
+        },
+        "after": {
+          "$ref": "#/$defs/Entity",
+          "description": "After the update."
+        }
+      },
+      "required": [
+        "before",
+        "after"
+      ],
+      "description": "Result of `entity.update`."
+    },
+    "EntityRemoveArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        },
+        "id": {
+          "$ref": "#/$defs/EntityId",
+          "description": "Entity id."
+        }
+      },
+      "required": [
+        "scene",
+        "expected_revision",
+        "id"
+      ],
+      "description": "Arguments of `entity.remove`."
+    },
+    "EntityRemoved": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "$ref": "#/$defs/Entity",
+          "description": "The removed entity."
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "description": "Result of `entity.remove`."
+    },
+    "ReachabilityArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": "string",
+          "description": "Scene name."
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Start cell; defaults to the player spawn."
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Target cell; defaults to the scene objective (win condition)."
+        }
+      },
+      "required": [
+        "scene"
+      ],
+      "description": "Arguments of `analysis.reachability`."
+    },
+    "ReachabilityReport": {
+      "type": "object",
+      "properties": {
+        "verdict": {
+          "$ref": "#/$defs/Verdict",
+          "description": "The single field to branch on."
+        },
+        "summary": {
+          "type": "string",
+          "description": "One-paragraph explanation."
+        },
+        "from": {
+          "$ref": "#/$defs/Position",
+          "description": "Start cell."
+        },
+        "target": {
+          "$ref": "#/$defs/Target",
+          "description": "What was searched for."
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Model assumptions (see [`ASSUMPTIONS`])."
+        },
+        "geometric": {
+          "$ref": "#/$defs/GeometricResult",
+          "description": "Walls-only answer."
+        },
+        "gameplay": {
+          "$ref": "#/$defs/GameplayResult",
+          "description": "Rules-aware answer."
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Blocker"
+          },
+          "description": "Blockers bordering the reachable region (only when gameplay has no path)."
+        },
+        "repairs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepairReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Verified single-removal repairs (only when gameplay has no path)."
+        }
+      },
+      "required": [
+        "verdict",
+        "summary",
+        "from",
+        "target",
+        "assumptions",
+        "geometric",
+        "gameplay",
+        "blockers"
+      ],
+      "description": "Full answer to a reachability query."
+    },
+    "Verdict": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "solvable",
+          "description": "Objective target: winnable within `max_ticks`."
+        },
+        {
+          "type": "string",
+          "const": "unsolvable",
+          "description": "Objective target: not winnable within `max_ticks`."
+        },
+        {
+          "type": "string",
+          "const": "reachable",
+          "description": "Cell target: a gameplay path exists."
+        },
+        {
+          "type": "string",
+          "const": "unreachable",
+          "description": "Cell target: no gameplay path exists."
+        }
+      ],
+      "description": "Overall answer of a reachability query."
+    },
+    "Target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "objective"
+            },
+            "win_condition": {
+              "$ref": "#/$defs/WinCondition",
+              "description": "The scene's win condition."
+            }
+          },
+          "required": [
+            "kind",
+            "win_condition"
+          ],
+          "description": "The scene's win condition (an exit, possibly with all keys)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cell"
+            },
+            "position": {
+              "$ref": "#/$defs/Position",
+              "description": "The cell."
+            }
+          },
+          "required": [
+            "kind",
+            "position"
+          ],
+          "description": "A specific cell."
+        }
+      ],
+      "description": "What a query asked to reach."
+    },
+    "GeometricResult": {
+      "type": "object",
+      "properties": {
+        "reachable": {
+          "type": "boolean",
+          "description": "Whether the target is reachable when only walls block."
+        },
+        "path_length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Moves on the shortest walls-only path."
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Position"
+          },
+          "description": "Cells of that path, excluding the start."
+        },
+        "explored_cells": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Cells expanded by the search."
+        }
+      },
+      "required": [
+        "reachable",
+        "path",
+        "explored_cells"
+      ],
+      "description": "Walls-only reachability."
+    },
+    "GameplayResult": {
+      "type": "object",
+      "properties": {
+        "reachable": {
+          "type": "boolean",
+          "description": "Whether a legal move sequence reaches the target (ignoring `max_ticks`)."
+        },
+        "unreachable_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UnreachableReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the target is not reached within the rules."
+        },
+        "path_length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Moves on the shortest legal path."
+        },
+        "moves": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Direction"
+          },
+          "description": "The shortest legal move sequence (directions for `move` actions)."
+        },
+        "keys_collected_on_path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyColor"
+          },
+          "description": "Keys collected along `moves`, in order."
+        },
+        "max_ticks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The scene's tick limit."
+        },
+        "within_max_ticks": {
+          "type": "boolean",
+          "description": "Whether `path_length <= max_ticks`."
+        },
+        "reachable_cells": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Cells reachable under the gameplay rules from the start."
+        },
+        "obtainable_keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyColor"
+          },
+          "description": "Key colors that can be picked up from the start."
+        },
+        "explored_states": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "(cell, keys) states expanded."
+        }
+      },
+      "required": [
+        "reachable",
+        "moves",
+        "keys_collected_on_path",
+        "max_ticks",
+        "within_max_ticks",
+        "reachable_cells",
+        "obtainable_keys",
+        "explored_states"
+      ],
+      "description": "Rules-aware reachability."
+    },
+    "UnreachableReason": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "no_path"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "No sequence of legal moves reaches the target."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "exceeds_max_ticks"
+            },
+            "shortest_path_length": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Moves needed by the shortest solution."
+            },
+            "max_ticks": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "The scene's tick limit."
+            }
+          },
+          "required": [
+            "kind",
+            "shortest_path_length",
+            "max_ticks"
+          ],
+          "description": "The objective is reachable, but only in more moves than `max_ticks` allows."
+        }
+      ],
+      "description": "Why the gameplay search did not reach the target."
+    },
+    "Direction": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "north",
+          "description": "Towards smaller `y`."
+        },
+        {
+          "type": "string",
+          "const": "east",
+          "description": "Towards larger `x`."
+        },
+        {
+          "type": "string",
+          "const": "south",
+          "description": "Towards larger `y`."
+        },
+        {
+          "type": "string",
+          "const": "west",
+          "description": "Towards smaller `x`."
+        }
+      ],
+      "description": "One of the four movement directions."
+    },
+    "Blocker": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/EntityId",
+          "description": "The blocking entity."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntityKind",
+          "description": "Its kind."
+        },
+        "position": {
+          "$ref": "#/$defs/Position",
+          "description": "Its cell."
+        },
+        "reason": {
+          "$ref": "#/$defs/BlockerReason",
+          "description": "Why it blocks."
+        }
+      },
+      "required": [
+        "entity",
+        "kind",
+        "position",
+        "reason"
+      ],
+      "description": "An entity bordering the gameplay-reachable region that stops further progress."
+    },
+    "BlockerReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "wall",
+          "description": "A wall."
+        },
+        {
+          "type": "string",
+          "const": "door_key_not_in_scene",
+          "description": "A door whose key color does not exist in the scene."
+        },
+        {
+          "type": "string",
+          "const": "door_key_unobtainable",
+          "description": "A door whose key exists but cannot be picked up from the start."
+        }
+      ],
+      "description": "Why an entity blocks the reachable region."
+    },
+    "RepairReport": {
+      "type": "object",
+      "properties": {
+        "frontier_size": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Blockers bordering the reachable region."
+        },
+        "evaluated": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Blockers actually evaluated (at most `MAX_REPAIR_CANDIDATES`)."
+        },
+        "exhaustive": {
+          "type": "boolean",
+          "description": "Whether every frontier blocker was evaluated."
+        },
+        "single_removals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepairCandidate"
+          },
+          "description": "Verified repairs, shortest resulting path first, then by entity id."
+        },
+        "note": {
+          "type": "string",
+          "description": "What the result does and does not establish."
+        }
+      },
+      "required": [
+        "frontier_size",
+        "evaluated",
+        "exhaustive",
+        "single_removals",
+        "note"
+      ],
+      "description": "Single-removal repair search results."
+    },
+    "RepairCandidate": {
+      "type": "object",
+      "properties": {
+        "remove": {
+          "$ref": "#/$defs/EntityId",
+          "description": "Entity whose removal makes the target reachable (verified)."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntityKind",
+          "description": "Its kind."
+        },
+        "position": {
+          "$ref": "#/$defs/Position",
+          "description": "Its cell."
+        },
+        "resulting_path_length": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Shortest path length after the removal."
+        }
+      },
+      "required": [
+        "remove",
+        "kind",
+        "position",
+        "resulting_path_length"
+      ],
+      "description": "A verified single-entity repair."
+    },
+    "EpisodeStartArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scene": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Scene to play. Required for authors; players may omit it (their scene is fixed by\nthe launcher) or repeat it."
+        }
+      },
+      "description": "Arguments of `episode.start`."
+    },
+    "EpisodeStarted": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "New episode id (unique within the session)."
+        },
+        "scene": {
+          "type": "string",
+          "description": "Scene being played."
+        },
+        "scene_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Revision of the scene content the episode was started from."
+        },
+        "initial_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash at tick 0."
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation",
+          "description": "The first observation."
+        }
+      },
+      "required": [
+        "episode_id",
+        "scene",
+        "scene_revision",
+        "initial_hash",
+        "observation"
+      ],
+      "description": "Result of `episode.start` and `episode.reset`."
+    },
+    "Observation": {
+      "type": "object",
+      "properties": {
+        "tick": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Ticks elapsed."
+        },
+        "max_ticks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Tick limit of the scene."
+        },
+        "ticks_remaining": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Ticks left before `max_ticks` is reached."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Result so far."
+        },
+        "objective": {
+          "$ref": "#/$defs/ObjectiveStatus",
+          "description": "What winning requires right now."
+        },
+        "grid": {
+          "$ref": "#/$defs/GridSize",
+          "description": "Grid dimensions."
+        },
+        "player": {
+          "$ref": "#/$defs/Position",
+          "description": "Current player position."
+        },
+        "inventory": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyColor"
+          },
+          "description": "Key colors held."
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VisibleEntity"
+          },
+          "description": "Entities on the board, excluding the player's spawn marker and collected keys."
+        },
+        "ascii": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The board as text rows (see `legend`)."
+        },
+        "legend": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LegendEntry"
+          },
+          "description": "Glyph legend for `ascii`."
+        },
+        "legal_actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "description": "Actions that would be accepted now, in canonical order."
+        }
+      },
+      "required": [
+        "tick",
+        "max_ticks",
+        "ticks_remaining",
+        "outcome",
+        "objective",
+        "grid",
+        "player",
+        "inventory",
+        "entities",
+        "ascii",
+        "legend",
+        "legal_actions"
+      ],
+      "description": "Everything a player may observe. The game is fully observable, so this is the complete\nworld state minus authoring metadata (labels, revisions, allocator state)."
+    },
+    "ObjectiveStatus": {
+      "type": "object",
+      "properties": {
+        "win_condition": {
+          "$ref": "#/$defs/WinCondition",
+          "description": "The scene's win condition."
+        },
+        "description": {
+          "type": "string",
+          "description": "Plain-language statement of the objective."
+        },
+        "keys_required": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyColor"
+          },
+          "description": "Keys that must be held to win (empty for `reach_exit`)."
+        },
+        "keys_missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyColor"
+          },
+          "description": "Required keys not yet held."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "Whether the episode has been won."
+        }
+      },
+      "required": [
+        "win_condition",
+        "description",
+        "keys_required",
+        "keys_missing",
+        "complete"
+      ],
+      "description": "What the win condition currently requires."
+    },
+    "VisibleEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/EntityId",
+          "description": "Stable id (useful to interpret diagnostics and events)."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntityKind",
+          "description": "What it is."
+        },
+        "position": {
+          "$ref": "#/$defs/Position",
+          "description": "Where it is."
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "position"
+      ],
+      "description": "An entity as a player sees it: no authoring labels."
+    },
+    "Action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "move"
+            },
+            "direction": {
+              "$ref": "#/$defs/Direction",
+              "description": "Where to move."
+            }
+          },
+          "required": [
+            "type",
+            "direction"
+          ],
+          "description": "Move one cell."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "wait"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Let one tick pass without moving."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "forfeit"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Give up; the episode fails immediately."
+        }
+      ],
+      "description": "A player action. Serialized with a `type` tag, e.g. `{\"type\":\"move\",\"direction\":\"east\"}`."
+    },
+    "EpisodeObserved": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Episode id."
+        },
+        "scene": {
+          "type": "string",
+          "description": "Scene being played."
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation",
+          "description": "The current observation."
+        }
+      },
+      "required": [
+        "episode_id",
+        "scene",
+        "observation"
+      ],
+      "description": "Result of `episode.observe`."
+    },
+    "ActArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "The action."
+        },
+        "expected_tick": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "If given, the action is rejected (`stale_tick`) unless the episode is at this tick.\nRecommended: it makes retries safe."
+        },
+        "include_observation": {
+          "type": "boolean",
+          "description": "Include the new observation in the result (default true).",
+          "default": true
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "description": "Arguments of `episode.act`."
+    },
+    "ActResult": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Episode id."
+        },
+        "tick": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Tick reached."
+        },
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "The accepted action."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "description": "Events of this tick, in resolution order."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Outcome after the tick."
+        },
+        "state_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash after the tick."
+        },
+        "observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Observation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The new observation, unless disabled."
+        }
+      },
+      "required": [
+        "episode_id",
+        "tick",
+        "action",
+        "events",
+        "outcome",
+        "state_hash"
+      ],
+      "description": "Result of `episode.act`."
+    },
+    "Event": {
+      "type": "object",
+      "properties": {
+        "tick": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Tick the event belongs to."
+        }
+      },
+      "required": [
+        "tick"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "started"
+            },
+            "player": {
+              "$ref": "#/$defs/Position",
+              "description": "Spawn position."
+            }
+          },
+          "required": [
+            "type",
+            "player"
+          ],
+          "description": "The episode started with the player at its spawn point."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "moved"
+            },
+            "from": {
+              "$ref": "#/$defs/Position",
+              "description": "Previous cell."
+            },
+            "to": {
+              "$ref": "#/$defs/Position",
+              "description": "New cell."
+            },
+            "direction": {
+              "$ref": "#/$defs/Direction",
+              "description": "Direction moved."
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "to",
+            "direction"
+          ],
+          "description": "The player moved."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "waited"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "The player waited."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "key_collected"
+            },
+            "key": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The key entity."
+            },
+            "color": {
+              "$ref": "#/$defs/KeyColor",
+              "description": "Its color."
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "color"
+          ],
+          "description": "The player picked up a key."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "door_passed"
+            },
+            "door": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The door entity."
+            },
+            "color": {
+              "$ref": "#/$defs/KeyColor",
+              "description": "Its color."
+            }
+          },
+          "required": [
+            "type",
+            "door",
+            "color"
+          ],
+          "description": "The player entered a door cell while holding its key."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "exit_reached"
+            },
+            "exit": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The exit entity."
+            }
+          },
+          "required": [
+            "type",
+            "exit"
+          ],
+          "description": "The player stepped onto an exit."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "exit_requirements_unmet"
+            },
+            "exit": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The exit entity."
+            },
+            "missing_keys": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KeyColor"
+              },
+              "description": "Keys still required."
+            }
+          },
+          "required": [
+            "type",
+            "exit",
+            "missing_keys"
+          ],
+          "description": "The player stepped onto an exit without satisfying the win condition."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "won"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "The episode was won."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "failed"
+            },
+            "reason": {
+              "$ref": "#/$defs/FailureReason",
+              "description": "Why."
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "description": "The episode failed."
+        }
+      ],
+      "description": "A recorded consequence of an accepted action (or of the episode start, at tick 0)."
+    },
+    "EventsArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "since_tick": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Only events with a tick greater than this."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Return at most this many of the most recent matching events (default 100, max 1000)."
+        }
+      },
+      "description": "Arguments of `episode.events`."
+    },
+    "EventsResult": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Episode id."
+        },
+        "tick": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Current tick."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "description": "Matching events, oldest first."
+        },
+        "total_matching": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of matching events before `limit` was applied."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Whether older matching events were omitted."
+        }
+      },
+      "required": [
+        "episode_id",
+        "tick",
+        "events",
+        "total_matching",
+        "truncated"
+      ],
+      "description": "Result of `episode.events`."
+    },
+    "AssertArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assertions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          },
+          "description": "Assertions to evaluate (1-256)."
+        }
+      },
+      "required": [
+        "assertions"
+      ],
+      "description": "Arguments of `episode.assert`."
+    },
+    "Assertion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "outcome_is"
+            },
+            "status": {
+              "$ref": "#/$defs/OutcomeStatus",
+              "description": "Expected status."
+            }
+          },
+          "required": [
+            "type",
+            "status"
+          ],
+          "description": "The outcome has this status."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "player_at"
+            },
+            "position": {
+              "$ref": "#/$defs/Position",
+              "description": "Expected cell."
+            }
+          },
+          "required": [
+            "type",
+            "position"
+          ],
+          "description": "The player stands on this cell."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "has_key"
+            },
+            "color": {
+              "$ref": "#/$defs/KeyColor",
+              "description": "Expected color."
+            }
+          },
+          "required": [
+            "type",
+            "color"
+          ],
+          "description": "The player holds this key."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tick_at_most"
+            },
+            "tick": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Upper bound."
+            }
+          },
+          "required": [
+            "type",
+            "tick"
+          ],
+          "description": "At most this many ticks have elapsed."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "event_occurred"
+            },
+            "event": {
+              "$ref": "#/$defs/EventType",
+              "description": "Event type."
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "description": "At least one event of this type was recorded."
+        }
+      ],
+      "description": "A check against the active episode."
+    },
+    "OutcomeStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "in_progress",
+          "description": "Still running."
+        },
+        {
+          "type": "string",
+          "const": "won",
+          "description": "Won."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "Failed."
+        }
+      ],
+      "description": "Coarse outcome status used by assertions."
+    },
+    "EventType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "started",
+          "description": "`started`."
+        },
+        {
+          "type": "string",
+          "const": "moved",
+          "description": "`moved`."
+        },
+        {
+          "type": "string",
+          "const": "waited",
+          "description": "`waited`."
+        },
+        {
+          "type": "string",
+          "const": "key_collected",
+          "description": "`key_collected`."
+        },
+        {
+          "type": "string",
+          "const": "door_passed",
+          "description": "`door_passed`."
+        },
+        {
+          "type": "string",
+          "const": "exit_reached",
+          "description": "`exit_reached`."
+        },
+        {
+          "type": "string",
+          "const": "exit_requirements_unmet",
+          "description": "`exit_requirements_unmet`."
+        },
+        {
+          "type": "string",
+          "const": "won",
+          "description": "`won`."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "`failed`."
+        }
+      ],
+      "description": "Event type names used by assertions."
+    },
+    "AssertResult": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Episode id."
+        },
+        "all_passed": {
+          "type": "boolean",
+          "description": "Whether every assertion holds."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssertionResult"
+          },
+          "description": "One result per assertion, in order."
+        }
+      },
+      "required": [
+        "episode_id",
+        "all_passed",
+        "results"
+      ],
+      "description": "Result of `episode.assert`."
+    },
+    "AssertionResult": {
+      "type": "object",
+      "properties": {
+        "assertion": {
+          "$ref": "#/$defs/Assertion",
+          "description": "The assertion."
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether it holds."
+        },
+        "actual": {
+          "type": "string",
+          "description": "The observed value, in words."
+        }
+      },
+      "required": [
+        "assertion",
+        "passed",
+        "actual"
+      ],
+      "description": "Result of one assertion."
+    },
+    "SnapshotCaptureArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional note."
+        }
+      },
+      "description": "Arguments of `snapshot.capture`."
+    },
+    "SnapshotRestoreArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "snapshot_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Snapshot id from `snapshot.capture`."
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Must equal the current revision."
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "expected_revision"
+      ],
+      "description": "Arguments of `snapshot.restore`."
+    },
+    "SnapshotRestored": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotInfo",
+          "description": "What was restored."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The new revision (always greater than before the restore)."
+        }
+      },
+      "required": [
+        "snapshot",
+        "revision"
+      ],
+      "description": "Result of `snapshot.restore`."
+    },
+    "ReplayExportArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Author sessions only: write the replay to this file. Player sessions write to the\nlauncher's replay directory (if configured) and may not choose paths."
+        }
+      },
+      "description": "Arguments of `replay.export`."
+    },
+    "ReplayExported": {
+      "type": "object",
+      "properties": {
+        "episode_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Episode id."
+        },
+        "steps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Accepted actions recorded."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Outcome at export time."
+        },
+        "final_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash at export time."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "File written, if any."
+        },
+        "replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Replay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The replay itself, when no file was written."
+        }
+      },
+      "required": [
+        "episode_id",
+        "steps",
+        "outcome",
+        "final_hash"
+      ],
+      "description": "Result of `replay.export`."
+    },
+    "Replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "Always `\"agentforge.replay\"`."
+        },
+        "format_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Replay file format version."
+        },
+        "state_hash_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Canonical hash encoding version used for every hash in this file."
+        },
+        "engine_version": {
+          "type": "string",
+          "description": "Engine version that recorded the replay (informational)."
+        },
+        "scene_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Name of the scene in its project, if known (informational)."
+        },
+        "scene": {
+          "$ref": "#/$defs/SceneDocument",
+          "description": "The frozen scene the episode started from."
+        },
+        "scene_digest": {
+          "$ref": "#/$defs/StateHash",
+          "description": "Digest of `scene`."
+        },
+        "initial_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash at tick 0."
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReplayStep"
+          },
+          "description": "Accepted actions in order."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Outcome after the last step."
+        },
+        "final_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash after the last step."
+        }
+      },
+      "required": [
+        "format",
+        "format_version",
+        "state_hash_version",
+        "engine_version",
+        "scene",
+        "scene_digest",
+        "initial_hash",
+        "steps",
+        "outcome",
+        "final_hash"
+      ],
+      "description": "A recorded episode."
+    },
+    "SceneDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "$ref": "#/$defs/GridSize",
+          "description": "Grid dimensions."
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules",
+          "description": "Rule parameters."
+        },
+        "next_entity_id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Identifier the next created entity will receive (ID allocator state)."
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Entity"
+          },
+          "description": "Entities in ascending id order."
+        }
+      },
+      "required": [
+        "size",
+        "rules",
+        "next_entity_id",
+        "entities"
+      ],
+      "description": "Serialized form of a [`Scene`], used by project files, snapshots and replays."
+    },
+    "ReplayStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tick": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Tick reached by the action."
+        },
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "The action."
+        },
+        "hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash after the action."
+        }
+      },
+      "required": [
+        "tick",
+        "action",
+        "hash"
+      ],
+      "description": "One accepted action."
+    },
+    "ReplayVerifyArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Replay file to verify."
+        },
+        "replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Replay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Inline replay to verify."
+        },
+        "scene": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Also check that the replay's scene matches this scene of the open project."
+        }
+      },
+      "description": "Arguments of `replay.verify`. Provide exactly one of `path` and `replay`."
+    },
+    "ReplayVerified": {
+      "type": "object",
+      "properties": {
+        "verified": {
+          "type": "boolean",
+          "description": "Every hash and the outcome matched."
+        },
+        "steps_checked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Steps re-executed with matching hashes."
+        },
+        "steps_recorded": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Steps in the recording."
+        },
+        "recorded_outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Outcome stored in the replay."
+        },
+        "reproduced_outcome": {
+          "$ref": "#/$defs/Outcome",
+          "description": "Outcome reached by re-execution."
+        },
+        "reproduced_final_hash": {
+          "$ref": "#/$defs/StateHash",
+          "description": "State hash reached by re-execution."
+        },
+        "scene_digest": {
+          "$ref": "#/$defs/StateHash",
+          "description": "Digest of the replay's scene."
+        },
+        "engine_version_recorded": {
+          "type": "string",
+          "description": "Engine version that recorded the replay."
+        },
+        "engine_version_current": {
+          "type": "string",
+          "description": "Engine version that verified it."
+        },
+        "divergence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Divergence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "First disagreement, if any."
+        },
+        "scene_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "With `scene`: whether the replay's scene digest equals that scene's digest."
+        }
+      },
+      "required": [
+        "verified",
+        "steps_checked",
+        "steps_recorded",
+        "recorded_outcome",
+        "reproduced_outcome",
+        "reproduced_final_hash",
+        "scene_digest",
+        "engine_version_recorded",
+        "engine_version_current"
+      ],
+      "description": "Result of `replay.verify`."
+    },
+    "Divergence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "scene_digest"
+            },
+            "expected": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recorded value."
+            },
+            "actual": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recomputed value."
+            }
+          },
+          "required": [
+            "kind",
+            "expected",
+            "actual"
+          ],
+          "description": "The embedded scene does not hash to the recorded digest."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "initial_hash"
+            },
+            "expected": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recorded value."
+            },
+            "actual": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recomputed value."
+            }
+          },
+          "required": [
+            "kind",
+            "expected",
+            "actual"
+          ],
+          "description": "The tick-0 state hash differs."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tick"
+            },
+            "step_index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Zero-based step index."
+            },
+            "expected": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Recorded tick."
+            },
+            "actual": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Tick reached."
+            }
+          },
+          "required": [
+            "kind",
+            "step_index",
+            "expected",
+            "actual"
+          ],
+          "description": "A step records a tick that re-execution did not reach."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "action_rejected"
+            },
+            "step_index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Zero-based step index."
+            },
+            "action": {
+              "$ref": "#/$defs/Action",
+              "description": "The rejected action."
+            },
+            "error": {
+              "type": "string",
+              "description": "Why it was rejected."
+            }
+          },
+          "required": [
+            "kind",
+            "step_index",
+            "action",
+            "error"
+          ],
+          "description": "A recorded action was rejected on re-execution."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "state_hash"
+            },
+            "step_index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Zero-based step index."
+            },
+            "tick": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Tick of the step."
+            },
+            "expected": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recorded value."
+            },
+            "actual": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recomputed value."
+            }
+          },
+          "required": [
+            "kind",
+            "step_index",
+            "tick",
+            "expected",
+            "actual"
+          ],
+          "description": "The hash after a step differs."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "outcome"
+            },
+            "expected": {
+              "$ref": "#/$defs/Outcome",
+              "description": "Recorded value."
+            },
+            "actual": {
+              "$ref": "#/$defs/Outcome",
+              "description": "Reproduced value."
+            }
+          },
+          "required": [
+            "kind",
+            "expected",
+            "actual"
+          ],
+          "description": "The final outcome differs."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "final_hash"
+            },
+            "expected": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recorded value."
+            },
+            "actual": {
+              "$ref": "#/$defs/StateHash",
+              "description": "Recomputed value."
+            }
+          },
+          "required": [
+            "kind",
+            "expected",
+            "actual"
+          ],
+          "description": "The final hash differs."
+        }
+      ],
+      "description": "Where re-execution first disagreed with the recording."
+    }
+  }
+}

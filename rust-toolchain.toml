@@ -1,0 +1,6 @@
+# The toolchain this workspace is verified with (fmt, clippy -D warnings, tests, demo).
+# rustup-managed installs pick this up automatically; other installs should use >= 1.99.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
