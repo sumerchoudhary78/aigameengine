@@ -214,6 +214,7 @@ Every request is one JSON line. Full argument and result schemas: `protocol.sche
 | `cell_occupied` | The target cell already holds an entity. |
 | `duplicate_player` | A scene holds at most one player. |
 | `duplicate_key_color` | A scene holds at most one key per color. |
+| `invalid_portal_pair` | A portal pair id must be between 0 and 9. |
 | `invalid_label` | Labels are 1-64 characters without control characters. |
 | `invalid_rules` | A rule parameter is out of range. |
 | `scene_not_playable` | The scene lacks the required player/control or objective entities, so no episode can start. |
@@ -222,6 +223,7 @@ Every request is one JSON line. Full argument and result schemas: `protocol.sche
 | `stale_episode` | expected_episode_id is not the active episode; the action was not applied. |
 | `stale_tick` | expected_tick does not match the episode's tick; the action was not applied. |
 | `move_blocked` | A wall occupies the move target. |
+| `one_way_blocked` | The move target is a one-way tile that allows entry only from another direction. |
 | `door_locked` | The move target is a door whose key the player does not hold. |
 | `snapshot_not_found` | No snapshot has this id in this session. |
 | `limit_exceeded` | A documented limit (batch size, snapshot count, ...) would be exceeded. |

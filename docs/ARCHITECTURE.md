@@ -1,6 +1,6 @@
 # Architecture
 
-AgentForge milestone 1 is a deterministic simulation kernel with a machine-first protocol.
+AgentForge is a deterministic simulation kernel with a machine-first protocol.
 This document explains who owns state, how it changes, what "deterministic" means here,
 how permissions work, how schemas stay in sync, and what was deliberately deferred.
 
@@ -19,7 +19,8 @@ agentforge-cli    `agentforge` binary               (+ clap, tracing-subscriber)
 - **core** knows nothing about transports, sessions, files or model providers. Every public
   function is a pure function of its inputs.
 - **host** turns protocol requests into core calls. It owns session state, enforces roles and
-  revisions, and reads and writes files.
+  revisions, and reads and writes files. It also carries the two transports: bounded JSON
+  Lines and MCP over stdio.
 - **cli** wires a host to stdin/stdout and provides the demo, replay verification, schema
   export and benchmarks.
 - **demo** clients depend on **no** engine crate. They spawn `agentforge serve` processes and
@@ -71,6 +72,29 @@ This is **local capability separation between processes**, not authentication. A
 can launch the binary can launch an author session. Remote access would need a transport
 with real authentication, which is out of scope.
 
+## MCP transport
+
+`agentforge mcp` (and `agentforge physics mcp`) serve the same session through the Model
+Context Protocol, so an MCP client can keep one session alive without holding a pipe. The
+adapter is a transport, not a second implementation:
+
+- `tools/list` is generated from `OpId` (grid) or the physics operation catalog, filtered to
+  the launcher-fixed role. Descriptions and argument schemas come from the same catalog as
+  `discover`, so they cannot drift.
+- `tools/call` rebuilds a protocol envelope and enters `handle_line`, the single dispatch
+  path. Revision checks, atomic batches, stale-episode guards and error bodies are unchanged.
+- Tool names replace dots with underscores (`entity.create` becomes `entity_create`) to
+  satisfy MCP client name rules; the mapping is one-way.
+- Successful results carry `{revision, result}`; engine failures are `isError` results with
+  `{revision, error}`. JSON-RPC errors are reserved for transport problems: malformed
+  messages, unknown methods, unknown tools and non-object arguments.
+- Only the legacy 2025-06-18 revision is implemented. A modern client that probes
+  `server/discover` gets an unknown-method error and falls back to `initialize`; a
+  modern-only client cannot connect.
+
+The server is synchronous with one request in flight, like the JSON Lines loop. It adds no
+simulation state and no authorization: the role still comes from the launcher.
+
 ## Revisions, concurrency and retries
 
 - The session revision starts at 0 (or 1 when a project is preloaded). Every accepted
@@ -93,11 +117,15 @@ with real authentication, which is out of scope.
 `episode.reset` replays the same frozen scene. Turn order is specified in
 `agentforge_core::episode` and published by `discover` (`game.tick_resolution_order`):
 
-1. reject if ended, out of bounds, wall, or locked door (nothing changes);
+1. reject if ended, or if the first cell of a move is outside the grid, a wall, a locked
+   door, or a one-way tile facing against the move (nothing changes);
 2. tick += 1;
-3. apply: move (collect an uncollected key on entry), wait, or forfeit (fails immediately);
-4. win if on an exit and the win condition holds;
-5. otherwise fail if `tick == max_ticks`.
+3. apply: move resolves the whole displacement (floor and ice crossings, at most one portal
+   hop, collecting an uncollected key on the final cell), wait, or forfeit (fails
+   immediately);
+4. fail immediately if the final cell is a hazard;
+5. win if on an exit and the win condition holds;
+6. otherwise fail if `tick == max_ticks`.
 
 There are no autonomous entities, timers or randomness, so no simulation work is pending
 between ticks. Snapshots therefore capture entities, rules, the ID allocator, tick, player,
@@ -139,9 +167,10 @@ u32 max_ticks, u8 win_condition        (1 reach_exit, 2 collect_all_keys_then_ex
 u32 next_entity_id
 u32 entity_count
 per entity, ascending id:
-  u32 id, u8 kind                      (1 player, 2 wall, 3 key, 4 door, 5 exit)
-  u8 color                             (0 none, else 1 + index in red, green, blue,
-                                        yellow, purple, orange, cyan, white)
+  u32 id, u8 kind                      (1 player, 2 wall, 3 key, 4 door, 5 exit,
+                                        6 ice, 7 one_way, 8 hazard, 9 portal)
+  u8 attribute                         (0 none; key/door 1 + color index;
+                                        one_way 1 + direction index; portal 1 + pair id)
   i32 x, i32 y
 ```
 
@@ -155,7 +184,8 @@ str("agentforge.state.v1")
 u32 tick
 i32 player_x, i32 player_y
 u8 inventory bitmask                   (bit i = color index i)
-u8 outcome                             (0 in progress, 1 won, 2 failed: max_ticks, 3 failed: forfeited)
+u8 outcome                             (0 in progress, 1 won, 2 failed: max_ticks,
+                                       3 failed: forfeited, 4 failed: hazard)
 u32 outcome_tick                       (0 while in progress)
 ```
 
@@ -190,34 +220,45 @@ the replay starts from that project's scene.
 
 `analysis::reachability` answers two questions separately:
 
-- **geometric**: walls block; doors are open; keys, win condition and `max_ticks` are
-  ignored. If this fails, walls are the cause.
-- **gameplay**: breadth-first search over (cell, keys held) with the real rules. With at most
-  64×64 cells and 8 key colors, the search visits at most about a million states and is run
-  to exhaustion, so "unreachable" is a proof. Non-consumable colored keys are what keep it
-  exhaustive and bounded; consumable keys would make the state space grow exponentially with
-  the number of doors.
+- **geometric**: walls block; doors and terrain are open; keys, win condition and
+  `max_ticks` are ignored. It is a walls-only diagnostic, not an oracle: a portal can make
+  gameplay reachable while this is not, and a wrong-way one-way can do the reverse.
+- **gameplay**: breadth-first search over (cell, keys held) with the real rules, including
+  slides, one-way entry, portal hops and fatal hazards. Terrain is static, so it adds no
+  state dimension: with at most 64×64 cells and 8 key colors, the search visits at most
+  about a million states and is run to exhaustion, so "unreachable" is a proof.
+  Non-consumable colored keys are what keep it exhaustive and bounded; consumable keys would
+  make the state space grow exponentially with the number of doors.
+
+A move resolves through `movement::plan`, the same function episodes use, so play and
+analysis cannot disagree. Entering ice starts a slide that continues until a wall, locked
+door, wrong-way one-way, edge or object stops it; objects stop slides, terrain does not.
+Portals are one hop and end a displacement; hazards are entered and fail the episode. The
+search never expands a hazard or a winning exit state.
 
 Stepping onto an exit while the win condition holds ends the episode, so the search never
 continues past such a state. A route to a cell beyond an exit is therefore correctly
 unreachable, and a key behind a winning exit is correctly unobtainable.
 
-When gameplay fails, the report names the **blockers**: walls next to cells the player can
-still move on from, doors whose key is missing or unreachable, required keys that cannot be
-reached (`collect_all_keys_then_exit`), and exits that end the episode before a cell
-target. **Repair candidates** are every entity whose single removal could change the search
-result:
+When gameplay fails, the report names the **blockers**: walls, wrong-way one-way tiles and
+hazards next to cells the player can still move from or slide through; doors whose key is
+missing or unreachable; required keys that cannot be reached (`collect_all_keys_then_exit`);
+and exits that end the episode before a cell target. **Repair candidates** are every entity
+whose single removal could change the search result:
 
-- walls and doors adjacent to cells the player can still move on from (the search never
-  tries to enter any other wall or door);
+- walls, doors, keys, exits, wrong-way one-way tiles and hazards adjacent to active cells
+  (the search never tries to enter any other ones);
+- ice tiles that an active move enters (removing one changes where a slide stops);
 - every key, when the win condition requires all keys (removing a key can only drop a
   requirement or close doors);
 - exits reached in a winning state, for cell targets.
 
-Each candidate (up to 64 per query) is verified by re-running the search without it, and
-only verified repairs are listed. Because the candidate set covers everything that could
-matter, "none of the candidates works" after an exhaustive evaluation proves that at least
-two changes are needed. The report never guesses a culprit.
+Portals are deliberately excluded: a valid portal repair changes both members of a pair, so
+it is already a two-entity change outside the single-removal guarantee. Each candidate (up to
+64 per query) is verified by re-running the search without it, and only verified repairs are
+listed. Because the candidate set covers everything that could matter, "none of the
+candidates works" after an exhaustive evaluation proves that at least two changes are
+needed. The report never guesses a culprit.
 
 ## Schemas and documentation without drift
 
@@ -260,7 +301,7 @@ two changes are needed. The report never guesses a culprit.
   editor's world.
 - **Colored, non-consumed keys; one key per color.** They keep solvability exact and the
   canonical state small.
-- **No randomness.** Nothing in milestone 1 needs it. A future seeded RNG would be part of
+- **No randomness.** Nothing in the grid engine needs it. A future seeded RNG would be part of
   the snapshot and hash encoding (with a version bump).
 - **Rejected moves do not consume ticks.** `legal_actions` is then exactly the set of
   accepted actions, and an illegal action is a no-op with an explanation.
@@ -279,8 +320,10 @@ hash domains are distinct, preserving existing grid replay hashes. See
 
 These are extension points only; none is implemented.
 
-- **MCP adapter.** Expose the same `OpId` dispatcher as MCP tools over stdio, so interactive
-  agents can call it without holding a pipe themselves.
+- **Modern MCP.** Support the 2026-07-28 per-request-metadata revision (including
+  `server/discover`) alongside the legacy `initialize` handshake.
+- **Remote transports.** A network transport with real authentication. Today the boundary is
+  local process separation.
 - **Richer rules.** A bounded declarative rule format for new mechanics (enemies, switches,
   timers), informed by VGDL, PuzzleScript and Griddly GDY rather than arbitrary code.
 - **Session-level replays** that include authoring edits; persisted snapshots.

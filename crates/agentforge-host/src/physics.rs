@@ -181,14 +181,23 @@ output!(EpisodeStatus {
     outcome: Outcome
 });
 output!(StatusResult { role: Role, revision: u64, has_scene: bool, path: Option<String>, episode: Option<EpisodeStatus>, snapshots: usize });
+/// One physics operation as published by `discover` and the generated schema.
 #[derive(Serialize, JsonSchema)]
-struct OperationInfo {
-    name: String,
-    roles: Vec<Role>,
-    input_schema: Value,
-    output_schema: Value,
-    example_arguments: Value,
-    example_result: Value,
+pub struct OperationInfo {
+    /// Wire name, for example `scene.set`.
+    pub name: String,
+    /// One-line description.
+    pub summary: String,
+    /// Roles allowed to call it.
+    pub roles: Vec<Role>,
+    /// Standalone JSON Schema of the arguments.
+    pub input_schema: Value,
+    /// Standalone JSON Schema of the result.
+    pub output_schema: Value,
+    /// An example arguments object.
+    pub example_arguments: Value,
+    /// The example's expected result.
+    pub example_result: Value,
 }
 output!(Discovery { protocol_version: u32, engine_version: String, physics_version: String, conventions: Vec<String>, max_bodies: usize, max_ticks: u32, max_request_bytes: usize, max_snapshots: usize, max_batch_edits: usize, operations: Vec<OperationInfo> });
 
@@ -250,6 +259,11 @@ impl PhysicsHost {
     /// Current authoring revision. Episode ticks do not increment it.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Capability fixed when the session was created.
+    pub fn role(&self) -> Role {
+        self.role
     }
 
     /// Handles a bounded JSON request, preserving correlation and protocol checks.
@@ -669,32 +683,112 @@ impl crate::server::Session for PhysicsHost {
     }
 }
 
-const OPERATIONS: &[(&str, bool)] = &[
-    ("discover", false),
-    ("session.status", false),
-    ("scene.set", true),
-    ("scene.get", true),
-    ("scene.apply_batch", true),
-    ("scene.validate", true),
-    ("scene.save", true),
-    ("scene.load", true),
-    ("scene.svg", true),
-    ("episode.start", false),
-    ("episode.reset", false),
-    ("episode.observe", false),
-    ("episode.act", false),
-    ("episode.events", false),
-    ("replay.export", false),
-    ("replay.verify", true),
-    ("replay.verify_file", true),
-    ("snapshot.capture", true),
-    ("snapshot.restore", true),
+/// Every physics operation: name, author-only, summary. The order is documentation order.
+const OPERATIONS: &[(&str, bool, &str)] = &[
+    (
+        "discover",
+        false,
+        "Describe the physics model, conventions, limits, operations and schemas this session may call.",
+    ),
+    (
+        "session.status",
+        false,
+        "Report this session's role, revision, open scene, active episode and snapshots.",
+    ),
+    (
+        "scene.set",
+        true,
+        "Replace the open scene with a validated document; the change is in memory until saved.",
+    ),
+    ("scene.get", true, "Return the open scene document."),
+    (
+        "scene.apply_batch",
+        true,
+        "Apply settings and body edits atomically: all succeed, or nothing changes.",
+    ),
+    (
+        "scene.validate",
+        true,
+        "Check data and reference invariants and whether control and objective are configured.",
+    ),
+    (
+        "scene.save",
+        true,
+        "Validate the scene and write it atomically as a versioned physics project.",
+    ),
+    (
+        "scene.load",
+        true,
+        "Load and validate a versioned physics project without changing the session on failure.",
+    ),
+    (
+        "scene.svg",
+        true,
+        "Render the initial body poses and goal sensor as SVG.",
+    ),
+    (
+        "episode.start",
+        false,
+        "Start a fresh episode on the open scene.",
+    ),
+    (
+        "episode.reset",
+        false,
+        "Restart the active episode from its initial scene.",
+    ),
+    (
+        "episode.observe",
+        false,
+        "Return the current observation: body poses, velocities, contacts and outcome.",
+    ),
+    (
+        "episode.act",
+        false,
+        "Apply one action and advance exactly one fixed timestep.",
+    ),
+    (
+        "episode.events",
+        false,
+        "Return recent contact, overlap and outcome events.",
+    ),
+    (
+        "replay.export",
+        false,
+        "Export the active episode recording inline and optionally to an author-chosen path.",
+    ),
+    (
+        "replay.verify",
+        true,
+        "Re-execute an inline recording and compare every recorded state hash.",
+    ),
+    (
+        "replay.verify_file",
+        true,
+        "Re-execute a recording from a bounded file and compare every recorded state hash.",
+    ),
+    (
+        "snapshot.capture",
+        true,
+        "Capture the scene, save path and episode recording as an in-memory checkpoint.",
+    ),
+    (
+        "snapshot.restore",
+        true,
+        "Rebuild a checkpoint by replaying its inputs and assign a fresh episode id.",
+    ),
 ];
+
+fn operation_entry(name: &str) -> Option<&'static (&'static str, bool, &'static str)> {
+    OPERATIONS.iter().find(|(op, _, _)| *op == name)
+}
+
 fn author_only(name: &str) -> Option<bool> {
-    OPERATIONS
-        .iter()
-        .find(|(op, _)| *op == name)
-        .map(|(_, author)| *author)
+    operation_entry(name).map(|(_, author, _)| *author)
+}
+
+/// Operations advertised to `role`, in documentation order, with schemas and examples.
+pub fn operations(role: Role) -> Vec<OperationInfo> {
+    discovery(role).operations
 }
 
 fn example_scene() -> PhysicsSceneDocument {
@@ -720,6 +814,7 @@ fn operation<A: JsonSchema + Serialize, R: JsonSchema + Serialize>(
 ) -> OperationInfo {
     OperationInfo {
         name: name.into(),
+        summary: operation_entry(name).map_or_else(String::new, |entry| entry.2.to_owned()),
         roles: if author_only(name) == Some(true) {
             vec![Role::Author]
         } else {
@@ -1012,7 +1107,7 @@ mod tests {
     #[test]
     fn permissions_unknown_operations_and_strict_inputs() {
         let mut host = PhysicsHost::player(example_scene()).expect("player");
-        for &(name, author) in OPERATIONS {
+        for &(name, author, _) in OPERATIONS {
             if author {
                 error(&mut host, name, json!({}), ErrorCode::PermissionDenied);
             }

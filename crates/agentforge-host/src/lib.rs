@@ -11,9 +11,13 @@
 //! * [`storage`] reads and atomically writes project and replay files.
 //! * [`server`] runs a host over any line-oriented reader/writer pair (JSON Lines on
 //!   stdin/stdout in the `agentforge` binary).
+//! * [`mcp`] exposes the same session and operation catalog as Model Context Protocol tools
+//!   over stdio, so interactive agents can keep one session alive across calls.
 #![warn(missing_docs)]
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod lines;
+pub mod mcp;
 pub mod physics;
 pub mod protocol;
 pub mod server;

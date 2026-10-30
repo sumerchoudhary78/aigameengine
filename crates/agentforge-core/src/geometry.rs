@@ -93,6 +93,26 @@ impl Direction {
             Direction::West => "west",
         }
     }
+
+    /// Position of this direction in [`Direction::ALL`].
+    pub const fn index(self) -> u8 {
+        match self {
+            Direction::North => 0,
+            Direction::East => 1,
+            Direction::South => 2,
+            Direction::West => 3,
+        }
+    }
+
+    /// The direction pointing the opposite way.
+    pub const fn opposite(self) -> Self {
+        match self {
+            Direction::North => Direction::South,
+            Direction::East => Direction::West,
+            Direction::South => Direction::North,
+            Direction::West => Direction::East,
+        }
+    }
 }
 
 impl fmt::Display for Direction {
@@ -191,5 +211,14 @@ mod tests {
         assert!(GridSize::new(64, 64).is_supported());
         assert!(!GridSize::new(0, 4).is_supported());
         assert!(!GridSize::new(65, 4).is_supported());
+    }
+
+    #[test]
+    fn direction_indices_and_opposites_are_consistent() {
+        for (index, direction) in Direction::ALL.into_iter().enumerate() {
+            assert_eq!(usize::from(direction.index()), index);
+            assert_eq!(direction.opposite().opposite(), direction);
+            assert_eq!(direction.opposite().index(), (direction.index() + 2) % 4);
+        }
     }
 }

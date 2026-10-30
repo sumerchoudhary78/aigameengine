@@ -4,8 +4,9 @@
 //! Lines are read with a hard size limit, so an oversized or endless line cannot exhaust
 //! memory; it is skipped up to its newline and answered with `request_too_large`.
 
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 
+use crate::lines::{LineRead, read_bounded_line};
 use crate::protocol::{ErrorBody, ErrorCode, MAX_REQUEST_BYTES, ResponseEnvelope};
 use crate::session::Host;
 
@@ -89,60 +90,6 @@ pub fn serve<R: BufRead, W: Write>(
         serde_json::to_writer(&mut output, &response)?;
         output.write_all(b"\n")?;
         output.flush()?;
-    }
-}
-
-enum LineRead {
-    Eof,
-    Line,
-    TooLong,
-}
-
-/// Reads one line of at most `limit` bytes (plus newline) into `buffer`.
-fn read_bounded_line<R: BufRead>(
-    input: &mut R,
-    buffer: &mut Vec<u8>,
-    limit: usize,
-) -> io::Result<LineRead> {
-    // Up to `limit` content bytes plus a two-byte "\r\n" terminator.
-    let read = Read::take(&mut *input, limit as u64 + 2).read_until(b'\n', buffer)?;
-    if read == 0 {
-        return Ok(LineRead::Eof);
-    }
-    let terminated = buffer.last() == Some(&b'\n');
-    if !terminated && read == limit + 2 {
-        // Over the limit and the line goes on: discard the rest of it.
-        discard_line(input)?;
-        return Ok(LineRead::TooLong);
-    }
-    if terminated {
-        buffer.pop();
-        if buffer.last() == Some(&b'\r') {
-            buffer.pop();
-        }
-    }
-    if buffer.len() > limit {
-        return Ok(LineRead::TooLong);
-    }
-    Ok(LineRead::Line)
-}
-
-fn discard_line<R: BufRead>(input: &mut R) -> io::Result<()> {
-    loop {
-        let available = input.fill_buf()?;
-        if available.is_empty() {
-            return Ok(());
-        }
-        match available.iter().position(|byte| *byte == b'\n') {
-            Some(index) => {
-                input.consume(index + 1);
-                return Ok(());
-            }
-            None => {
-                let length = available.len();
-                input.consume(length);
-            }
-        }
     }
 }
 

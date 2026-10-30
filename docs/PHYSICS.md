@@ -12,6 +12,7 @@ cargo run --release -p agentforge-cli -- physics demo --out out/physics
 cargo run --release -p agentforge-cli -- physics replay verify out/physics/replay.json
 cargo run --release -p agentforge-cli -- physics bench --worlds 20 --ticks 600
 cargo run -p agentforge-cli -- physics schema --check
+cargo run --release -p agentforge-cli -- physics mcp --role author
 ```
 
 The demo uses deterministic scripted **protocol clients**. An author moves a goal sensor
@@ -27,6 +28,7 @@ agent access to actual simulated motion; it does not show an LLM solving the gam
 cargo run -p agentforge-cli -- physics serve --role author
 cargo run -p agentforge-cli -- physics serve --role player \
   --project out/physics/launch.physics.json
+cargo run -p agentforge-cli -- physics mcp --role author
 ```
 
 Send one JSON request per line. Logs go to stderr. For example:
@@ -37,10 +39,11 @@ Send one JSON request per line. Logs go to stderr. For example:
 {"request_id":"push","protocol_version":1,"operation":"episode.act","arguments":{"expected_episode_id":1,"expected_tick":0,"action":{"type":"impulse","impulse":{"x":1.0,"y":0.0}}}}
 ```
 
-`discover` publishes generated input/output schemas, example arguments and results, and
-limits for the operations allowed by the launcher-fixed role. The committed
+`discover` publishes generated input/output schemas, a summary, example arguments and results,
+and limits for the operations allowed by the launcher-fixed role. The committed
 [physics schema](physics.schema.json) contains an example for every supported operation.
-`physics schema` regenerates it; `physics schema --check` detects drift.
+`physics schema` regenerates it; `physics schema --check` detects drift. The same catalog is
+served as MCP tools by `physics mcp`; see [MCP.md](MCP.md).
 
 | Operations | Capability and behavior |
 | --- | --- |

@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use agentforge_core::hash::scene_digest;
 use agentforge_core::project::Name;
 use agentforge_host::protocol::catalog;
-use agentforge_host::{Host, Role, server, storage};
+use agentforge_host::{Host, Role, mcp, server, storage};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
@@ -40,6 +40,9 @@ enum Command {
     /// Serve one session over JSON Lines on stdin/stdout. Logs go to stderr
     /// (filter with AGENTFORGE_LOG, e.g. AGENTFORGE_LOG=debug).
     Serve(ServeArgs),
+    /// Serve one long-lived session as Model Context Protocol tools over stdin/stdout.
+    /// Logs go to stderr; stdout carries only JSON-RPC messages.
+    Mcp(ServeArgs),
     /// Run the end-to-end demo: author creates a broken dungeon, a player fails, the author
     /// repairs it through the protocol, the player wins, and a fresh process verifies the
     /// replay. Clients are deterministic scripts, not language models.
@@ -117,6 +120,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Physics(command) => physics::run(command),
         Command::Serve(args) => serve(args),
+        Command::Mcp(args) => serve_mcp(args),
         Command::Demo(args) => demo(&args),
         Command::Replay(ReplayCommand::Verify {
             replay,
@@ -145,16 +149,16 @@ fn init_logging() {
         .init();
 }
 
-fn serve(args: ServeArgs) -> Result<ExitCode, String> {
+fn build_host(args: ServeArgs) -> Result<Host, String> {
     let load = |path: &Path| storage::load_project(path).map_err(|e| e.to_string());
-    let mut host = match args.role {
+    match args.role {
         RoleArg::Author => {
             if args.scene.is_some() || args.replay_dir.is_some() {
                 return Err("--scene and --replay-dir only apply to player sessions".to_owned());
             }
             match args.project {
-                Some(path) => Host::author_with_project(load(&path)?, Some(path)),
-                None => Host::author(),
+                Some(path) => Ok(Host::author_with_project(load(&path)?, Some(path))),
+                None => Ok(Host::author()),
             }
         }
         RoleArg::Player => {
@@ -164,9 +168,13 @@ fn serve(args: ServeArgs) -> Result<ExitCode, String> {
                 std::fs::create_dir_all(directory)
                     .map_err(|e| format!("cannot create {}: {e}", directory.display()))?;
             }
-            Host::player(load(&path)?, &scene, args.replay_dir).map_err(|e| e.to_string())?
+            Host::player(load(&path)?, &scene, args.replay_dir).map_err(|e| e.to_string())
         }
-    };
+    }
+}
+
+fn serve(args: ServeArgs) -> Result<ExitCode, String> {
+    let mut host = build_host(args)?;
     let role = match host.role() {
         Role::Author => "author",
         Role::Player => "player",
@@ -184,6 +192,51 @@ fn serve(args: ServeArgs) -> Result<ExitCode, String> {
         "input closed"
     );
     Ok(ExitCode::SUCCESS)
+}
+
+fn serve_mcp(args: ServeArgs) -> Result<ExitCode, String> {
+    let mut host = build_host(args)?;
+    let role = host.role();
+    let tools = mcp::grid_tools(role);
+    let info = mcp::ServerInfo {
+        name: "agentforge".to_owned(),
+        version: agentforge_core::ENGINE_VERSION.to_owned(),
+        instructions: grid_instructions(role),
+    };
+    tracing::info!(
+        role = role.as_str(),
+        tools = tools.len(),
+        "serving MCP on stdin/stdout"
+    );
+    let stats = mcp::serve(
+        &mut host,
+        tools,
+        info,
+        io::stdin().lock(),
+        BufWriter::new(io::stdout().lock()),
+    )
+    .map_err(|e| format!("stream error: {e}"))?;
+    tracing::info!(
+        requests = stats.requests,
+        errors = stats.errors,
+        "input closed"
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn grid_instructions(role: Role) -> String {
+    format!(
+        "AgentForge grid engine (role: {}). Tools are engine operations with dots replaced by \
+         underscores (entity.create is entity_create). Call discover first: it returns the \
+         game model, conventions, limits and an example for every operation. Successful calls \
+         return {{revision, result}} and engine failures return isError with {{revision, error}}; \
+         mutating tools require expected_revision, so read the revision from the last response. \
+         After stale_revision, read session_status or scene_get and retry with the current \
+         revision instead of resending blindly. episode_act requires expected_episode_id and \
+         expected_tick. The role is fixed by the launcher; a player session is bound to one \
+         scene and cannot author.",
+        role.as_str()
+    )
 }
 
 fn demo(args: &DemoArgs) -> Result<ExitCode, String> {

@@ -3,18 +3,19 @@
 //!
 //! Two questions are always answered separately, because they fail for different reasons:
 //!
-//! * **Geometric reachability** treats walls as the only obstacle (doors count as open,
-//!   keys and tick limits are ignored). If this fails, walls are the cause.
-//! * **Gameplay reachability** applies the real rules: doors need their key, keys are
-//!   collected on entry and never consumed, and the objective enforces the win condition
+//! * **Geometric reachability** treats walls as the only obstacle (doors, terrain, keys and
+//!   tick limits are ignored). It is a walls-only diagnostic, not an oracle.
+//! * **Gameplay reachability** applies the real rules: terrain, doors, keys, the objective
 //!   and `max_ticks`. The search is exhaustive over (cell, keys held) states, so an
 //!   "unreachable" verdict is a proof for the current scene, not a heuristic.
 //!
 //! When gameplay fails, the analysis lists what blocks the reachable region and verifies
 //! single-entity repairs by re-running the search with each candidate removed. Candidates
-//! are every entity whose removal could change the search: walls and doors next to cells
-//! the player can still move on from, required keys (for `collect_all_keys_then_exit`),
-//! and exits that end the episode before a cell target is reached. It never names a
+//! are every entity whose removal could change the search: walls, doors, keys, exits,
+//! wrong-way one-way tiles and hazards adjacent to cells the player can move from or slide
+//! through, entered ice, required keys (for `collect_all_keys_then_exit`), and exits that
+//! end the episode before a cell target. Portals are excluded: a valid portal repair changes
+//! two entities, so it is already covered by the two-change lower bound. It never names a
 //! culprit it has not verified; when no single removal works it says so, which is then a
 //! proof that at least two changes are needed.
 
@@ -40,13 +41,14 @@ pub use validation::{Issue, IssueCode, Severity, ValidationReport, validate};
 pub const MAX_REPAIR_CANDIDATES: usize = 64;
 
 /// Assumptions behind every [`ReachabilityReport`], published verbatim.
-pub const ASSUMPTIONS: [&str; 7] = [
-    "Movement is 4-directional on the integer grid; one move costs one tick.",
-    "Geometric reachability: walls block; doors count as open; keys, exits, win condition and max_ticks are ignored.",
-    "Gameplay reachability: walls block; a door is passable only while holding its color's key; keys are collected on entry and never consumed; stepping onto an exit while the win condition holds ends the episode, so no route continues past it; the objective target also requires a path length of at most max_ticks.",
+pub const ASSUMPTIONS: [&str; 8] = [
+    "Movement is 4-directional on the integer grid; one accepted move costs one tick, including any slide or portal hop.",
+    "Geometric reachability ignores terrain: walls block; doors, one-way tiles, ice, portals and hazards count as open; keys, win condition and max_ticks are ignored.",
+    "Gameplay reachability applies terrain: ice slides in the direction of travel until a wall, locked door, wrong-way one-way tile or the grid edge stops it, or until an object (key, door, exit, portal or hazard) is entered; a portal teleports once to its pair; entering a hazard fails the episode; a door is passable only while holding its color's key; keys are collected on entry and never consumed; stepping onto an exit while the win condition holds ends the episode.",
     "The gameplay search is exhaustive over (cell, keys held) states, so 'unreachable' is a proof for the current scene, not a heuristic.",
     "Starting on a key cell counts as holding that key.",
-    "Repair candidates are every entity whose single removal could change the search: walls and doors next to cells the player can still move on from, all keys when every key is required, and exits that end the episode before a cell target. Each listed repair was verified by re-running the gameplay search without that entity.",
+    "Repair candidates are every wall, door, key, exit, wrong-way one-way tile and hazard adjacent to a cell the search can still move from or slide through, every entered ice tile, all keys when every key is required, and exits that end the episode before a cell target. Each listed repair was verified by re-running the gameplay search without that entity.",
+    "Portals are not repair candidates: a valid portal repair changes both members of a pair, which is a two-entity change already covered by the lower bound.",
     "Multi-entity repairs are not searched; when the candidate list was evaluated exhaustively and none works, at least two changes are needed.",
 ];
 
@@ -95,7 +97,8 @@ pub enum UnreachableReason {
     },
 }
 
-/// Walls-only reachability.
+/// Walls-only reachability. Doors, keys, ice, one-way tiles, portals, hazards and tick
+/// limits are ignored; a portal can therefore make gameplay reachable while this is not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct GeometricResult {
     /// Whether the target is reachable when only walls block.
@@ -150,6 +153,10 @@ pub enum BlockerReason {
     RequiredKeyUnobtainable,
     /// An exit that ends the episode (as a win) before the cell target can be reached.
     EpisodeEndingExit,
+    /// A one-way tile that faces away from every active approach.
+    OneWay,
+    /// A hazard; entering it ends the episode as a failure.
+    Hazard,
 }
 
 /// An entity that stops the player from reaching the target.
@@ -390,7 +397,7 @@ fn blockers_and_candidates(
 ) -> (Vec<Blocker>, Candidates) {
     let key_colors = scene.key_colors();
     let mut blockers = Vec::new();
-    let mut candidates = search::adjacent_barriers(board, &play.expandable_cells);
+    let mut candidates = search::adjacent_entities(board, &play.active_cells);
     for (id, (kind, position)) in &candidates {
         let reason = match kind {
             EntityKind::Wall => Some(BlockerReason::Wall),
@@ -399,6 +406,12 @@ fn blockers_and_candidates(
                 Some(BlockerReason::DoorKeyUnobtainable)
             }
             EntityKind::Door { .. } => Some(BlockerReason::DoorKeyNotInScene),
+            EntityKind::OneWay { direction }
+                if search::one_way_blocks(board, &play.active_cells, *position, *direction) =>
+            {
+                Some(BlockerReason::OneWay)
+            }
+            EntityKind::Hazard => Some(BlockerReason::Hazard),
             _ => None,
         };
         if let Some(reason) = reason {
@@ -408,6 +421,22 @@ fn blockers_and_candidates(
                 position: *position,
                 reason,
             });
+        }
+    }
+    // Removing an entered ice tile can change where a slide stops, so it is a repair
+    // candidate even though it is not a blocker.
+    for (index, active) in play.active_cells.iter().enumerate() {
+        if !active {
+            continue;
+        }
+        if let Some(Occupant {
+            id,
+            kind: EntityKind::Ice,
+        }) = board.at_index(index)
+        {
+            candidates
+                .entry(id)
+                .or_insert((EntityKind::Ice, board.size().position(index)));
         }
     }
     let mut extra = Vec::new();
@@ -487,9 +516,9 @@ impl RepairSearch<'_> {
         let evaluated = candidates.len().min(MAX_REPAIR_CANDIDATES);
         let exhaustive = evaluated == candidates.len();
         let note = match (single_removals.is_empty(), exhaustive) {
-            (false, _) => "Each listed removal was verified by re-running the gameplay search on the scene without that entity.".to_owned(),
+            (false, _) => "Each listed removal was verified by re-running the gameplay search on the scene without that entity. Portals are not offered: a valid portal repair changes both members of a pair (two entities).".to_owned(),
             (true, true) => format!(
-                "None of the {evaluated} entities whose single removal could matter makes the target reachable, so at least two changes are needed (multi-entity repairs are not searched)."
+                "None of the {evaluated} entities whose single removal could matter makes the target reachable, so at least two changes are needed (multi-entity repairs are not searched; a portal repair is itself at least two entities)."
             ),
             (true, false) => format!(
                 "No verified single removal among the first {evaluated} of {} candidates; the rest were not evaluated.",
@@ -543,24 +572,41 @@ fn summarize(
             let cause = if geometric.reachable {
                 let causes: Vec<String> = blockers
                     .iter()
-                    .filter_map(|b| match (b.reason, b.kind.color()) {
-                        (BlockerReason::DoorKeyNotInScene, Some(color)) => Some(format!(
-                            "door {} at {} needs a {color} key, and the scene has none",
-                            b.entity, b.position
-                        )),
-                        (BlockerReason::DoorKeyUnobtainable, Some(color)) => Some(format!(
-                            "door {} at {} needs the {color} key, which cannot be reached",
-                            b.entity, b.position
-                        )),
-                        (BlockerReason::RequiredKeyUnobtainable, Some(color)) => Some(format!(
-                            "the required {color} key {} at {} cannot be reached",
-                            b.entity, b.position
-                        )),
-                        (BlockerReason::EpisodeEndingExit, _) => Some(format!(
+                    .filter_map(|b| match b.reason {
+                        BlockerReason::DoorKeyNotInScene => b.kind.color().map(|color| {
+                            format!(
+                                "door {} at {} needs a {color} key, and the scene has none",
+                                b.entity, b.position
+                            )
+                        }),
+                        BlockerReason::DoorKeyUnobtainable => b.kind.color().map(|color| {
+                            format!(
+                                "door {} at {} needs the {color} key, which cannot be reached",
+                                b.entity, b.position
+                            )
+                        }),
+                        BlockerReason::RequiredKeyUnobtainable => b.kind.color().map(|color| {
+                            format!(
+                                "the required {color} key {} at {} cannot be reached",
+                                b.entity, b.position
+                            )
+                        }),
+                        BlockerReason::EpisodeEndingExit => Some(format!(
                             "stepping onto exit {} at {} wins and ends the episode first",
                             b.entity, b.position
                         )),
-                        _ => None,
+                        BlockerReason::OneWay => match b.kind {
+                            EntityKind::OneWay { direction } => Some(format!(
+                                "one-way tile {} at {} only allows entry moving {direction}",
+                                b.entity, b.position
+                            )),
+                            _ => None,
+                        },
+                        BlockerReason::Hazard => Some(format!(
+                            "hazard {} at {} fails the episode on entry",
+                            b.entity, b.position
+                        )),
+                        BlockerReason::Wall => None,
                     })
                     .collect();
                 if causes.is_empty() {
@@ -572,7 +618,7 @@ fn summarize(
                     )
                 }
             } else {
-                "it is not reachable even with every door open, so walls separate it from the start"
+                "it is not reachable even when only walls are obstacles, so walls separate it from the start"
                     .to_owned()
             };
             let repair = match repairs.and_then(|r| r.single_removals.first().map(|c| (r, c))) {
@@ -867,5 +913,125 @@ mod tests {
                 .iter()
                 .any(|i| i.code == IssueCode::DoorWithoutKey)
         );
+    }
+
+    #[test]
+    fn a_portal_makes_a_walls_disconnected_scene_solvable() {
+        let scene = scene(&["@.0#E", "####0"], 50, WinCondition::ReachExit);
+        let report = reachability(&scene, None, None).expect("query runs");
+        assert!(
+            !report.geometric.reachable,
+            "the wall at (3, 0) separates start from exit without the portal"
+        );
+        assert_eq!(report.verdict, Verdict::Solvable);
+        assert_eq!(report.gameplay.path_length, Some(3));
+        assert_eq!(
+            report.gameplay.moves,
+            vec![Direction::East, Direction::East, Direction::North]
+        );
+    }
+
+    #[test]
+    fn a_hazard_is_a_blocker_and_its_removal_is_verified() {
+        let scene = scene(&["@.!E"], 50, WinCondition::ReachExit);
+        let report = reachability(&scene, None, None).expect("query runs");
+        assert!(
+            report.geometric.reachable,
+            "hazards count as open geometrically"
+        );
+        assert_eq!(report.verdict, Verdict::Unsolvable);
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|b| b.reason == BlockerReason::Hazard)
+        );
+        assert!(
+            report.summary.contains("fails the episode on entry"),
+            "{}",
+            report.summary
+        );
+        let repairs = report.repairs.expect("repairs computed");
+        let repairs: Vec<_> = repairs
+            .single_removals
+            .iter()
+            .filter(|r| r.kind == EntityKind::Hazard)
+            .collect();
+        assert_eq!(repairs.len(), 1, "removing the hazard opens the corridor");
+        assert_eq!(repairs[0].resulting_path_length, 3);
+    }
+
+    #[test]
+    fn a_wrong_way_one_way_is_a_blocker_and_its_removal_is_verified() {
+        let scene = scene(&["@<E"], 50, WinCondition::ReachExit);
+        let report = reachability(&scene, None, None).expect("query runs");
+        assert!(
+            report.geometric.reachable,
+            "one-way tiles count as open geometrically"
+        );
+        assert_eq!(report.verdict, Verdict::Unsolvable);
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|b| b.reason == BlockerReason::OneWay)
+        );
+        assert!(
+            report.summary.contains("only allows entry moving west"),
+            "{}",
+            report.summary
+        );
+        let repairs = report.repairs.expect("repairs computed");
+        assert!(repairs.exhaustive);
+        let removals: Vec<_> = repairs
+            .single_removals
+            .iter()
+            .filter(|r| {
+                r.kind
+                    == EntityKind::OneWay {
+                        direction: Direction::West,
+                    }
+            })
+            .collect();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].resulting_path_length, 2);
+    }
+
+    #[test]
+    fn entered_ice_is_a_verified_repair_candidate() {
+        // The slide crosses (1, 0), so the player cannot stop there to drop into the exit
+        // at (1, 1). Removing the ice stops the east move at (1, 0) instead.
+        let scene = scene(&["@~.#", "#E##", "####"], 50, WinCondition::ReachExit);
+        let report = reachability(&scene, None, None).expect("query runs");
+        assert!(report.geometric.reachable, "walls alone allow the exit");
+        assert_eq!(report.verdict, Verdict::Unsolvable);
+        let repairs = report.repairs.expect("repairs computed");
+        assert!(repairs.exhaustive);
+        let ice: Vec<_> = repairs
+            .single_removals
+            .iter()
+            .filter(|r| r.kind == EntityKind::Ice)
+            .collect();
+        assert_eq!(ice.len(), 1, "the entered ice tile is a candidate");
+        assert_eq!(ice[0].position, Position::new(1, 0));
+        assert_eq!(ice[0].resulting_path_length, 2);
+    }
+
+    /// Regression: ice entered only on a fatal slide is still a repair candidate, because
+    /// removing it can turn the ice cell into an ordinary stopping cell.
+    #[test]
+    fn ice_entered_on_a_fatal_slide_is_a_verified_repair() {
+        let scene = scene(&["@~!#E"], 50, WinCondition::ReachExit);
+        let report = reachability(&scene, None, Some(Position::new(1, 0))).expect("query runs");
+        assert_eq!(report.verdict, Verdict::Unreachable);
+        let repairs = report.repairs.expect("repairs computed");
+        assert!(repairs.exhaustive);
+        let ice: Vec<_> = repairs
+            .single_removals
+            .iter()
+            .filter(|r| r.kind == EntityKind::Ice)
+            .collect();
+        assert_eq!(ice.len(), 1);
+        assert_eq!(ice[0].resulting_path_length, 1);
     }
 }

@@ -1,5 +1,7 @@
 //! Scene validation: completeness errors and gameplay warnings.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -35,6 +37,10 @@ pub enum IssueCode {
     DoorWithoutKey,
     /// A key the player can never pick up.
     KeyUnobtainable,
+    /// A portal pair id occurs exactly once.
+    PortalUnpaired,
+    /// A portal pair id occurs more than twice.
+    PortalOverpaired,
 }
 
 /// One validation finding.
@@ -93,6 +99,50 @@ pub fn completeness_errors(scene: &Scene) -> Vec<Issue> {
             position: None,
             hint: Some("Create an entity with kind {\"type\":\"exit\"}.".to_owned()),
         });
+    }
+    let mut portals: BTreeMap<u8, Vec<(EntityId, Position)>> = BTreeMap::new();
+    for entity in scene.entities() {
+        if let EntityKind::Portal { pair } = entity.kind {
+            portals
+                .entry(pair)
+                .or_default()
+                .push((entity.id, entity.position));
+        }
+    }
+    for (pair, members) in portals {
+        match members.as_slice() {
+            [(id, position)] => issues.push(Issue {
+                severity: Severity::Error,
+                code: IssueCode::PortalUnpaired,
+                message: format!(
+                    "Portal {id} at {position} is the only portal with pair {pair}; portals must come in pairs."
+                ),
+                entities: vec![*id],
+                position: Some(*position),
+                hint: Some(format!(
+                    "Create a second portal with pair {pair}, or remove portal {id}."
+                )),
+            }),
+            [_, _] => {}
+            members => issues.push(Issue {
+                severity: Severity::Error,
+                code: IssueCode::PortalOverpaired,
+                message: format!(
+                    "Portal pair {pair} has {} portals ({}); exactly two are required.",
+                    members.len(),
+                    members
+                        .iter()
+                        .map(|(id, position)| format!("{id} at {position}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                entities: members.iter().map(|(id, _)| *id).collect(),
+                position: None,
+                hint: Some(format!(
+                    "Keep exactly two portals with pair {pair} and remove or relink the others."
+                )),
+            }),
+        }
     }
     issues
 }

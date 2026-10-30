@@ -275,6 +275,8 @@ fn event_type(kind: &EventKind) -> EventType {
         EventKind::DoorPassed { .. } => EventType::DoorPassed,
         EventKind::ExitReached { .. } => EventType::ExitReached,
         EventKind::ExitRequirementsUnmet { .. } => EventType::ExitRequirementsUnmet,
+        EventKind::PortalUsed { .. } => EventType::PortalUsed,
+        EventKind::HazardEntered { .. } => EventType::HazardEntered,
         EventKind::Won => EventType::Won,
         EventKind::Failed { .. } => EventType::Failed,
     }

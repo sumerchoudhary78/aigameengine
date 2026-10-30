@@ -5,7 +5,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::Position;
+use crate::geometry::{Direction, Position};
 use crate::ids::EntityId;
 
 /// Color shared by a key and the doors it opens. A scene holds at most one key per color.
@@ -190,6 +190,9 @@ impl FromIterator<KeyColor> for KeySet {
     }
 }
 
+/// Number of distinct portal pair ids: valid ids are `0..MAX_PORTAL_PAIRS`.
+pub const MAX_PORTAL_PAIRS: u8 = 10;
+
 /// What an entity is. Serialized with a `type` tag, e.g. `{"type": "door", "color": "red"}`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
@@ -212,6 +215,23 @@ pub enum EntityKind {
     },
     /// Winning target, subject to the scene's win condition.
     Exit,
+    /// Slippery floor. Entering it starts a slide in the direction of travel; the slide
+    /// continues until a wall, locked door, wrong-way one-way tile or the grid edge stops it,
+    /// or until the player enters an object.
+    Ice,
+    /// Passable only while moving in `direction`. Leaving it is always allowed.
+    OneWay {
+        /// The entry direction that is allowed.
+        direction: Direction,
+    },
+    /// Entering it fails the episode immediately.
+    Hazard,
+    /// Teleports the player to the other portal with the same `pair` id.
+    Portal {
+        /// Link id; exactly two portals share an id in a playable scene.
+        #[schemars(range(min = 0, max = 9))]
+        pair: u8,
+    },
 }
 
 impl EntityKind {
@@ -223,6 +243,10 @@ impl EntityKind {
             EntityKind::Key { .. } => "key",
             EntityKind::Door { .. } => "door",
             EntityKind::Exit => "exit",
+            EntityKind::Ice => "ice",
+            EntityKind::OneWay { .. } => "one_way",
+            EntityKind::Hazard => "hazard",
+            EntityKind::Portal { .. } => "portal",
         }
     }
 
@@ -230,7 +254,7 @@ impl EntityKind {
     pub const fn color(self) -> Option<KeyColor> {
         match self {
             EntityKind::Key { color } | EntityKind::Door { color } => Some(color),
-            EntityKind::Player | EntityKind::Wall | EntityKind::Exit => None,
+            _ => None,
         }
     }
 
@@ -242,6 +266,10 @@ impl EntityKind {
             EntityKind::Exit => crate::layout::EXIT,
             EntityKind::Key { color } => color.key_glyph(),
             EntityKind::Door { color } => color.door_glyph(),
+            EntityKind::Ice => crate::layout::ICE,
+            EntityKind::OneWay { direction } => crate::layout::one_way_glyph(direction),
+            EntityKind::Hazard => crate::layout::HAZARD,
+            EntityKind::Portal { pair } => crate::layout::portal_glyph(pair),
         }
     }
 }

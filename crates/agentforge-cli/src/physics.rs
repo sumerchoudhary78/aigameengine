@@ -1,12 +1,13 @@
 //! CLI entry points for the rigid-body simulation and its local protocol.
 use super::RoleArg;
 use agentforge_host::{
+    mcp,
     physics::{self as host, PhysicsHost},
     server, storage,
 };
 use agentforge_physics::{
     episode::{Action, Episode},
-    replay::Replay,
+    replay::{ENGINE_VERSION, Replay},
     scene::{PhysicsScene, PhysicsSceneDocument},
 };
 use clap::{Args, Subcommand};
@@ -22,6 +23,8 @@ use std::{
 pub enum PhysicsCommand {
     /// Run a fixed-role physics JSON Lines session over stdin/stdout.
     Serve(ServeArgs),
+    /// Serve one long-lived physics session as Model Context Protocol tools over stdio.
+    Mcp(ServeArgs),
     /// Run scripted protocol clients: author, failing playtest, repair, win, fresh replay.
     Demo {
         #[arg(long, default_value = "out/physics")]
@@ -63,26 +66,40 @@ pub enum ReplayCommand {
 pub fn run(command: PhysicsCommand) -> Result<ExitCode, String> {
     match command {
         PhysicsCommand::Serve(args) => {
-            let scene = args
-                .project
-                .as_deref()
-                .map(host::load_project)
-                .transpose()?;
-            let mut host = match args.role {
-                RoleArg::Author => match (scene, args.project) {
-                    (Some(scene), Some(path)) => PhysicsHost::author_with_project(scene, path)?,
-                    (scene, _) => PhysicsHost::author(scene)?,
-                },
-                RoleArg::Player => {
-                    PhysicsHost::player(scene.ok_or("physics player sessions require --project")?)?
-                }
-            };
+            let mut host = build_session(args)?;
             server::serve(
                 &mut host,
                 io::stdin().lock(),
                 BufWriter::new(io::stdout().lock()),
             )
             .map_err(|e| e.to_string())?;
+        }
+        PhysicsCommand::Mcp(args) => {
+            let mut host = build_session(args)?;
+            let tools = mcp::physics_tools(host.role());
+            let info = mcp::ServerInfo {
+                name: "agentforge-physics".to_owned(),
+                version: ENGINE_VERSION.to_owned(),
+                instructions: physics_instructions(host.role()),
+            };
+            tracing::info!(
+                role = host.role().as_str(),
+                tools = tools.len(),
+                "serving physics MCP on stdin/stdout"
+            );
+            let stats = mcp::serve(
+                &mut host,
+                tools,
+                info,
+                io::stdin().lock(),
+                BufWriter::new(io::stdout().lock()),
+            )
+            .map_err(|e| format!("stream error: {e}"))?;
+            tracing::info!(
+                requests = stats.requests,
+                errors = stats.errors,
+                "input closed"
+            );
         }
         PhysicsCommand::Demo { out, fixtures } => {
             let engine = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -131,6 +148,36 @@ pub fn run(command: PhysicsCommand) -> Result<ExitCode, String> {
     }
     Ok(ExitCode::SUCCESS)
 }
+fn build_session(args: ServeArgs) -> Result<PhysicsHost, String> {
+    let scene = args
+        .project
+        .as_deref()
+        .map(host::load_project)
+        .transpose()?;
+    match args.role {
+        RoleArg::Author => match (scene, args.project) {
+            (Some(scene), Some(path)) => PhysicsHost::author_with_project(scene, path),
+            (scene, _) => PhysicsHost::author(scene),
+        },
+        RoleArg::Player => {
+            PhysicsHost::player(scene.ok_or("physics player sessions require --project")?)
+        }
+    }
+}
+
+fn physics_instructions(role: agentforge_host::Role) -> String {
+    format!(
+        "AgentForge 2D rigid-body engine (role: {}). Tools are physics operations with dots \
+         replaced by underscores (scene.set is scene_set). Call discover first for units, \
+         limits, schemas and examples. SI units, Y up; each accepted action advances exactly \
+         one fixed timestep. Successful calls return {{revision, result}} and engine failures \
+         return isError with {{revision, error}}. Author writes require expected_revision; \
+         episode_act requires expected_episode_id and expected_tick. Player sessions are bound \
+         to one saved scene.",
+        role.as_str()
+    )
+}
+
 fn read_bounded_json(path: &Path) -> Result<serde_json::Value, String> {
     use std::io::Read;
     let mut bytes = Vec::new();

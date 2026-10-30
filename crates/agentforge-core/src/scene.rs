@@ -22,6 +22,8 @@ pub const MAX_BATCH_EDITS: usize = 4096;
 /// * both grid dimensions lie in `1..=64`;
 /// * every entity lies inside the grid, and a cell holds at most one entity;
 /// * at most one player, and at most one key per color;
+/// * portal pair ids lie in `0..=9` (pairing itself is a completeness rule, not a
+///   structural invariant, so scenes can be built incrementally);
 /// * every entity id is below the allocator's next id;
 /// * rules and labels are valid.
 ///
@@ -98,6 +100,12 @@ pub enum SceneError {
         color: KeyColor,
         /// The existing key entity.
         existing: EntityId,
+    },
+    /// A portal pair id outside `0..=9`.
+    #[error("portal pair {pair} is not supported; portal pairs are 0 through 9")]
+    InvalidPortalPair {
+        /// The rejected pair id.
+        pair: u8,
     },
     /// Label too long or containing control characters.
     #[error("invalid label: {reason}")]
@@ -474,7 +482,17 @@ impl Scene {
                     });
                 }
             }
-            EntityKind::Wall | EntityKind::Door { .. } | EntityKind::Exit => {}
+            EntityKind::Portal { pair } => {
+                if pair >= crate::entity::MAX_PORTAL_PAIRS {
+                    return Err(SceneError::InvalidPortalPair { pair });
+                }
+            }
+            EntityKind::Wall
+            | EntityKind::Door { .. }
+            | EntityKind::Exit
+            | EntityKind::Ice
+            | EntityKind::OneWay { .. }
+            | EntityKind::Hazard => {}
         }
         Ok(())
     }
@@ -614,6 +632,23 @@ mod tests {
             bad_label.map_err(|e| e.error),
             Err(SceneError::InvalidLabel { .. })
         ));
+    }
+
+    #[test]
+    fn portal_pair_ids_outside_the_glyph_range_are_rejected() {
+        let error = scene()
+            .apply_edits(&[create(EntityKind::Portal { pair: 10 }, 0, 0)])
+            .expect_err("pair ids have glyphs only for 0..=9");
+        assert!(matches!(
+            error.error,
+            SceneError::InvalidPortalPair { pair: 10 }
+        ));
+
+        let (scene, _) = scene()
+            .apply_edits(&[create(EntityKind::Portal { pair: 9 }, 0, 0)])
+            .expect("pair 9 is in range");
+        let portal = scene.entity(EntityId::new(1)).expect("created");
+        assert_eq!(portal.kind, EntityKind::Portal { pair: 9 });
     }
 
     #[test]

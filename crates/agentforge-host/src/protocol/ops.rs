@@ -157,6 +157,8 @@ pub struct Constraints {
     pub max_keys_per_color: u32,
     /// Number of key colors.
     pub key_color_count: u32,
+    /// Number of distinct portal pair ids (0-9).
+    pub max_portal_pairs: u32,
     /// Largest request line in bytes.
     pub max_request_bytes: u64,
     /// Longest `request_id`.
@@ -666,6 +668,10 @@ pub enum EventType {
     ExitReached,
     /// `exit_requirements_unmet`.
     ExitRequirementsUnmet,
+    /// `portal_used`.
+    PortalUsed,
+    /// `hazard_entered`.
+    HazardEntered,
     /// `won`.
     Won,
     /// `failed`.

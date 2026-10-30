@@ -15,6 +15,13 @@ const GRID_STROKE: &str = "#d9d4c7";
 const WALL_FILL: &str = "#3d3d3d";
 const EXIT_FILL: &str = "#2e7d32";
 const PLAYER_FILL: &str = "#1565c0";
+const ICE_FILL: &str = "#b3e5fc";
+const ONE_WAY_FILL: &str = "#e8eaf6";
+const HAZARD_FILL: &str = "#b71c1c";
+const PORTAL_FILLS: [&str; 10] = [
+    "#6a1b9a", "#ad1457", "#00695c", "#ef6c00", "#283593", "#4e342e", "#00838f", "#c62828",
+    "#2e7d32", "#37474f",
+];
 
 /// Renders `scene` as an SVG document captioned with `title`.
 pub fn scene_svg(scene: &Scene, title: &str) -> String {
@@ -47,10 +54,9 @@ pub fn scene_svg(scene: &Scene, title: &str) -> String {
     for entity in scene.entities() {
         svg.push_str(&entity_svg(entity.kind, entity.position));
         let (x, y) = origin(entity.position);
-        let id_fill = if entity.kind == EntityKind::Wall {
-            "#bdbdbd"
-        } else {
-            "#212121"
+        let id_fill = match entity.kind {
+            EntityKind::Wall | EntityKind::Hazard | EntityKind::Portal { .. } => "#e0e0e0",
+            _ => "#212121",
         };
         svg.push_str(&format!(
             "<text x=\"{}\" y=\"{}\" font-size=\"9\" fill=\"{id_fill}\">{}</text>\n",
@@ -110,6 +116,39 @@ fn entity_svg(kind: EntityKind, position: Position) -> String {
             cy + 4,
             color.door_glyph()
         ),
+        EntityKind::Ice => format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{ICE_FILL}\" stroke=\"#4fc3f7\"/>\n<text x=\"{cx}\" y=\"{}\" font-size=\"20\" fill=\"#01579b\" text-anchor=\"middle\">~</text>\n",
+            x + 2,
+            y + 2,
+            CELL - 4,
+            CELL - 4,
+            cy + 7
+        ),
+        EntityKind::OneWay { direction } => format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{ONE_WAY_FILL}\" stroke=\"#7986cb\"/>\n<text x=\"{cx}\" y=\"{}\" font-size=\"22\" fill=\"#283593\" text-anchor=\"middle\">{}</text>\n",
+            x + 2,
+            y + 2,
+            CELL - 4,
+            CELL - 4,
+            cy + 8,
+            crate::layout::one_way_glyph(direction)
+        ),
+        EntityKind::Hazard => format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{HAZARD_FILL}\" stroke=\"#7f0000\" stroke-width=\"2\"/>\n<text x=\"{cx}\" y=\"{}\" font-size=\"22\" font-weight=\"bold\" fill=\"#ffffff\" text-anchor=\"middle\">!</text>\n",
+            x + 2,
+            y + 2,
+            CELL - 4,
+            CELL - 4,
+            cy + 8
+        ),
+        EntityKind::Portal { pair } => {
+            let fill = PORTAL_FILLS[usize::from(pair % 10)];
+            format!(
+                "<circle cx=\"{cx}\" cy=\"{cy}\" r=\"15\" fill=\"{fill}\" stroke=\"#212121\" stroke-width=\"2\"/>\n<circle cx=\"{cx}\" cy=\"{cy}\" r=\"9\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"2\"/>\n<text x=\"{cx}\" y=\"{}\" font-size=\"13\" fill=\"#ffffff\" text-anchor=\"middle\">{}</text>\n",
+                cy + 4,
+                crate::layout::portal_glyph(pair)
+            )
+        }
     }
 }
 
@@ -160,5 +199,41 @@ mod tests {
         }
         assert!(svg.contains("a &lt;b&gt; &amp; &quot;c&quot;"));
         assert!(!svg.contains("<b>"));
+    }
+
+    #[test]
+    fn renders_every_terrain_kind() {
+        let edits = [
+            EntityKind::Player,
+            EntityKind::Ice,
+            EntityKind::OneWay {
+                direction: crate::geometry::Direction::East,
+            },
+            EntityKind::Hazard,
+            EntityKind::Portal { pair: 0 },
+            EntityKind::Portal { pair: 1 },
+        ]
+        .into_iter()
+        .zip(0..)
+        .map(|(kind, x)| SceneEdit::CreateEntity {
+            kind,
+            position: Position::new(x, 0),
+            label: None,
+        })
+        .collect::<Vec<_>>();
+        let scene = Scene::new(GridSize::new(6, 1), Rules::default())
+            .expect("valid")
+            .apply_edits(&edits)
+            .expect("valid")
+            .0;
+        let svg = scene_svg(&scene, "terrain");
+        for id in ["#1", "#2", "#3", "#4", "#5", "#6"] {
+            assert!(svg.contains(&format!(">{id}</text>")), "missing {id}");
+        }
+        assert!(svg.contains(">~</text>"), "ice glyph missing");
+        assert!(svg.contains(">></text>"), "one-way glyph missing");
+        assert!(svg.contains(">!</text>"), "hazard glyph missing");
+        assert!(svg.contains(">0</text>"), "portal 0 glyph missing");
+        assert!(svg.contains(">1</text>"), "portal 1 glyph missing");
     }
 }

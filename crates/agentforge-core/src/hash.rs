@@ -200,6 +200,23 @@ const fn kind_code(kind: EntityKind) -> u8 {
         EntityKind::Key { .. } => 3,
         EntityKind::Door { .. } => 4,
         EntityKind::Exit => 5,
+        EntityKind::Ice => 6,
+        EntityKind::OneWay { .. } => 7,
+        EntityKind::Hazard => 8,
+        EntityKind::Portal { .. } => 9,
+    }
+}
+
+/// Kind-specific attribute: color, one-way direction or portal pair.
+///
+/// For keys and doors this is `1 + color index`, exactly the old color byte, so existing
+/// scene digests stay unchanged.
+const fn attribute_code(kind: EntityKind) -> u8 {
+    match kind {
+        EntityKind::Key { color } | EntityKind::Door { color } => color.index() + 1,
+        EntityKind::OneWay { direction } => direction.index() + 1,
+        EntityKind::Portal { pair } => pair + 1,
+        _ => 0,
     }
 }
 
@@ -216,6 +233,10 @@ const fn outcome_code(outcome: Outcome) -> (u8, u32) {
             tick,
             reason: FailureReason::Forfeited,
         } => (3, tick),
+        Outcome::Failed {
+            tick,
+            reason: FailureReason::Hazard,
+        } => (4, tick),
     }
 }
 
@@ -223,8 +244,9 @@ const fn outcome_code(outcome: Outcome) -> (u8, u32) {
 ///
 /// Layout: `str("agentforge.scene.v1")`, `u32 width`, `u32 height`, `u32 max_ticks`,
 /// `u8 win_condition`, `u32 next_entity_id`, `u32 entity_count`, then per entity in
-/// ascending id order: `u32 id`, `u8 kind`, `u8 color` (0 = none, else 1 + color index),
-/// `i32 x`, `i32 y`.
+/// ascending id order: `u32 id`, `u8 kind` (1 player, 2 wall, 3 key, 4 door, 5 exit,
+/// 6 ice, 7 one-way, 8 hazard, 9 portal), `u8 attribute` (0 none; key/door 1 + color index;
+/// one-way 1 + direction index; portal 1 + pair), `i32 x`, `i32 y`.
 pub fn scene_digest(scene: &Scene) -> StateHash {
     let mut encoder = CanonicalEncoder::new(SCENE_DOMAIN);
     let size = scene.size();
@@ -239,7 +261,7 @@ pub fn scene_digest(scene: &Scene) -> StateHash {
     for entity in scene.entities() {
         encoder.u32(entity.id.get());
         encoder.u8(kind_code(entity.kind));
-        encoder.u8(entity.kind.color().map_or(0, |color| color.index() + 1));
+        encoder.u8(attribute_code(entity.kind));
         encoder.i32(entity.position.x);
         encoder.i32(entity.position.y);
     }
@@ -413,5 +435,58 @@ mod tests {
             .to_uppercase()
             .replace("SHA256:", "sha256:");
         assert!(upper.parse::<StateHash>().is_err(), "lowercase only");
+    }
+
+    fn scene_with_terrain(kind: Option<EntityKind>) -> Scene {
+        let mut edits = vec![
+            SceneEdit::CreateEntity {
+                kind: EntityKind::Player,
+                position: Position::new(0, 0),
+                label: None,
+            },
+            SceneEdit::CreateEntity {
+                kind: EntityKind::Exit,
+                position: Position::new(3, 0),
+                label: None,
+            },
+        ];
+        if let Some(kind) = kind {
+            edits.push(SceneEdit::CreateEntity {
+                kind,
+                position: Position::new(1, 0),
+                label: None,
+            });
+        }
+        Scene::new(GridSize::new(4, 1), Rules::default())
+            .and_then(|scene| scene.apply_edits(&edits).map_err(|e| e.error))
+            .map(|(scene, _)| scene)
+            .expect("valid scene")
+    }
+
+    #[test]
+    fn terrain_kinds_and_attributes_change_the_digest() {
+        let none = scene_digest(&scene_with_terrain(None));
+        let ice = scene_digest(&scene_with_terrain(Some(EntityKind::Ice)));
+        let hazard = scene_digest(&scene_with_terrain(Some(EntityKind::Hazard)));
+        let north = scene_digest(&scene_with_terrain(Some(EntityKind::OneWay {
+            direction: crate::geometry::Direction::North,
+        })));
+        let east = scene_digest(&scene_with_terrain(Some(EntityKind::OneWay {
+            direction: crate::geometry::Direction::East,
+        })));
+        let portal_zero = scene_digest(&scene_with_terrain(Some(EntityKind::Portal { pair: 0 })));
+        let portal_one = scene_digest(&scene_with_terrain(Some(EntityKind::Portal { pair: 1 })));
+
+        for (name, digest) in [
+            ("ice", ice),
+            ("hazard", hazard),
+            ("one-way north", north),
+            ("portal 0", portal_zero),
+        ] {
+            assert_ne!(none, digest, "{name} must change the scene digest");
+        }
+        assert_ne!(ice, hazard, "kind codes must differ");
+        assert_ne!(north, east, "one-way direction must be hashed");
+        assert_ne!(portal_zero, portal_one, "portal pair must be hashed");
     }
 }
