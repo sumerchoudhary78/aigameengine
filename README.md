@@ -7,12 +7,13 @@ editor, GUI, GPU, account, credentials or model API is involved, and no language
 inside the simulation loop: the engine executes the rules itself.
 
 > **Status: two vertical slices.** A turn-based 2D integer-grid dungeon (players, walls,
-> colored keys, matching doors, exits) and a headless fixed-timestep 2D rigid-body mode
-> (balls, boxes, materials, impulses, sensor goals). Both are driven through the same
-> versioned protocol, by JSON Lines clients and by MCP tools. They are foundations, not a
-> general-purpose engine: there is no rendering pipeline, scripting language or live viewer
-> yet (see [Roadmap](#roadmap)). "AgentForge" is a temporary internal working name, not a
-> claim of trademark availability.
+> colored keys, matching doors, exits, ice, one-way tiles, portals, hazards) and a headless
+> fixed-timestep 2D rigid-body mode (balls, boxes, materials, impulses, sensor goals). Both
+> are driven through the same versioned protocol, by JSON Lines clients and by MCP tools.
+> They are foundations, not a general-purpose engine: there is no rendering pipeline,
+> scripting language or live viewer yet (see [Roadmap](#roadmap)). See
+> [docs/TERRAIN.md](docs/TERRAIN.md) for the terrain model and its reachability proof.
+> "AgentForge" is a temporary internal working name, not a claim of trademark availability.
 
 ## What works
 
@@ -23,13 +24,18 @@ inside the simulation loop: the engine executes the rules itself.
 - **Play through the protocol**: episodes on a frozen copy of a scene, full observations
   (structured + ASCII + legal actions), one accepted action = exactly one logical tick,
   rejected actions change nothing and explain why (`door_locked` names the key and where it
-  is), exactly-once retries via `expected_episode_id` + `expected_tick`, events, assertions.
+  is, `one_way_blocked` names the allowed direction), exactly-once retries via
+  `expected_episode_id` + `expected_tick`, events, assertions.
+- **Terrain and movement**: ice slides (one tick per whole slide), one-way entry, paired
+  portals (one hop, never a chain), and fatal hazards. Terrain is static, so episode state
+  and the exhaustive reachability proof keep the same state space.
 - **Diagnostics that say what is actually wrong**: geometric (walls-only) vs gameplay
-  (keys, doors, exits that end the episode, win condition, `max_ticks`) reachability,
-  computed by exhaustive search, so "unsolvable" is a proof; named blockers (walls, doors
-  whose key is missing or unreachable, unreachable required keys); single-removal repairs
-  the engine has *verified* by re-solving, drawn from every entity whose removal could
-  matter, so "no single removal works" is also a proof.
+  (terrain, keys, doors, exits that end the episode, win condition, `max_ticks`)
+  reachability, computed by exhaustive search over `(cell, keys held)`, so "unsolvable" is
+  a proof; named blockers (walls, wrong-way one-ways, hazards, doors whose key is missing or
+  unreachable, unreachable required keys); single-removal repairs the engine has *verified*
+  by re-solving, drawn from every entity whose removal could matter, so "no single removal
+  works" is also a proof.
 - **Capability-separated sessions**: the launcher fixes each process's role
   (`--role author|player`). Player processes get a saved project and one scene; they cannot
   edit, restore, choose files or switch scenes. Requests cannot change a role.

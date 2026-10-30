@@ -719,6 +719,10 @@
       "meaning": "A scene holds at most one key per color."
     },
     {
+      "code": "invalid_portal_pair",
+      "meaning": "A portal pair id must be between 0 and 9."
+    },
+    {
       "code": "invalid_label",
       "meaning": "Labels are 1-64 characters without control characters."
     },
@@ -749,6 +753,10 @@
     {
       "code": "move_blocked",
       "meaning": "A wall occupies the move target."
+    },
+    {
+      "code": "one_way_blocked",
+      "meaning": "The move target is a one-way tile that allows entry only from another direction."
     },
     {
       "code": "door_locked",
@@ -1013,6 +1021,11 @@
         },
         {
           "type": "string",
+          "const": "invalid_portal_pair",
+          "description": "A portal pair id must be between 0 and 9."
+        },
+        {
+          "type": "string",
           "const": "invalid_label",
           "description": "Labels are 1-64 characters without control characters."
         },
@@ -1050,6 +1063,11 @@
           "type": "string",
           "const": "move_blocked",
           "description": "A wall occupies the move target."
+        },
+        {
+          "type": "string",
+          "const": "one_way_blocked",
+          "description": "The move target is a one-way tile that allows entry only from another direction."
         },
         {
           "type": "string",
@@ -1404,6 +1422,75 @@
           ],
           "additionalProperties": false,
           "description": "Winning target, subject to the scene's win condition."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ice"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Slippery floor. Entering it starts a slide in the direction of travel; the slide\ncontinues until a wall, locked door, wrong-way one-way tile or the grid edge stops it,\nor until the player enters an object."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "one_way"
+            },
+            "direction": {
+              "$ref": "#/$defs/Direction",
+              "description": "The entry direction that is allowed."
+            }
+          },
+          "required": [
+            "type",
+            "direction"
+          ],
+          "description": "Passable only while moving in `direction`. Leaving it is always allowed."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hazard"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Entering it fails the episode immediately."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "portal"
+            },
+            "pair": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 9,
+              "description": "Link id; exactly two portals share an id in a playable scene."
+            }
+          },
+          "required": [
+            "type",
+            "pair"
+          ],
+          "description": "Teleports the player to the other portal with the same `pair` id."
         }
       ],
       "description": "What an entity is. Serialized with a `type` tag, e.g. `{\"type\": \"door\", \"color\": \"red\"}`."
@@ -1452,6 +1539,31 @@
         }
       ],
       "description": "Color shared by a key and the doors it opens. A scene holds at most one key per color."
+    },
+    "Direction": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "north",
+          "description": "Towards smaller `y`."
+        },
+        {
+          "type": "string",
+          "const": "east",
+          "description": "Towards larger `x`."
+        },
+        {
+          "type": "string",
+          "const": "south",
+          "description": "Towards larger `y`."
+        },
+        {
+          "type": "string",
+          "const": "west",
+          "description": "Towards smaller `x`."
+        }
+      ],
+      "description": "One of the four movement directions."
     },
     "NamedDescription": {
       "type": "object",
@@ -1572,6 +1684,12 @@
           "minimum": 0,
           "description": "Number of key colors."
         },
+        "max_portal_pairs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of distinct portal pair ids (0-9)."
+        },
         "max_request_bytes": {
           "type": "integer",
           "format": "uint64",
@@ -1635,6 +1753,7 @@
         "max_players_per_scene",
         "max_keys_per_color",
         "key_color_count",
+        "max_portal_pairs",
         "max_request_bytes",
         "max_request_id_chars",
         "max_batch_edits",
@@ -1919,6 +2038,11 @@
           "type": "string",
           "const": "forfeited",
           "description": "The player forfeited."
+        },
+        {
+          "type": "string",
+          "const": "hazard",
+          "description": "The player entered a hazard."
         }
       ],
       "description": "Why an episode failed."
@@ -2455,6 +2579,16 @@
           "type": "string",
           "const": "key_unobtainable",
           "description": "A key the player can never pick up."
+        },
+        {
+          "type": "string",
+          "const": "portal_unpaired",
+          "description": "A portal pair id occurs exactly once."
+        },
+        {
+          "type": "string",
+          "const": "portal_overpaired",
+          "description": "A portal pair id occurs more than twice."
         }
       ],
       "description": "Stable machine-readable issue identifiers."
@@ -3265,7 +3399,7 @@
         "path",
         "explored_cells"
       ],
-      "description": "Walls-only reachability."
+      "description": "Walls-only reachability. Doors, keys, ice, one-way tiles, portals, hazards and tick\nlimits are ignored; a portal can therefore make gameplay reachable while this is not."
     },
     "GameplayResult": {
       "type": "object",
@@ -3395,31 +3529,6 @@
       ],
       "description": "Why the gameplay search did not reach the target."
     },
-    "Direction": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "north",
-          "description": "Towards smaller `y`."
-        },
-        {
-          "type": "string",
-          "const": "east",
-          "description": "Towards larger `x`."
-        },
-        {
-          "type": "string",
-          "const": "south",
-          "description": "Towards larger `y`."
-        },
-        {
-          "type": "string",
-          "const": "west",
-          "description": "Towards smaller `x`."
-        }
-      ],
-      "description": "One of the four movement directions."
-    },
     "Blocker": {
       "type": "object",
       "properties": {
@@ -3474,6 +3583,16 @@
           "type": "string",
           "const": "episode_ending_exit",
           "description": "An exit that ends the episode (as a win) before the cell target can be reached."
+        },
+        {
+          "type": "string",
+          "const": "one_way",
+          "description": "A one-way tile that faces away from every active approach."
+        },
+        {
+          "type": "string",
+          "const": "hazard",
+          "description": "A hazard; entering it ends the episode as a failure."
         }
       ],
       "description": "Why an entity blocks the target."
@@ -3978,7 +4097,7 @@
             "to",
             "direction"
           ],
-          "description": "The player moved."
+          "description": "The player moved. `to` is the last cell physically entered: for a slide it is where\nthe slide stopped, and for a portal it is the portal cell (see `PortalUsed`)."
         },
         {
           "type": "object",
@@ -4038,6 +4157,65 @@
             "color"
           ],
           "description": "The player entered a door cell while holding its key."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "portal_used"
+            },
+            "portal": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The portal entity that was entered."
+            },
+            "pair": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "Its pair id."
+            },
+            "from": {
+              "$ref": "#/$defs/Position",
+              "description": "The portal cell."
+            },
+            "to": {
+              "$ref": "#/$defs/Position",
+              "description": "The partner cell."
+            }
+          },
+          "required": [
+            "type",
+            "portal",
+            "pair",
+            "from",
+            "to"
+          ],
+          "description": "The player entered a portal and was moved to its partner."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hazard_entered"
+            },
+            "hazard": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The hazard entity."
+            },
+            "position": {
+              "$ref": "#/$defs/Position",
+              "description": "Its cell."
+            }
+          },
+          "required": [
+            "type",
+            "hazard",
+            "position"
+          ],
+          "description": "The player entered a hazard. A `Failed` event with reason `hazard` follows."
         },
         {
           "type": "object",
@@ -4359,6 +4537,16 @@
           "type": "string",
           "const": "exit_requirements_unmet",
           "description": "`exit_requirements_unmet`."
+        },
+        {
+          "type": "string",
+          "const": "portal_used",
+          "description": "`portal_used`."
+        },
+        {
+          "type": "string",
+          "const": "hazard_entered",
+          "description": "`hazard_entered`."
         },
         {
           "type": "string",

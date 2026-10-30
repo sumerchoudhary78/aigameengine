@@ -5,13 +5,17 @@
 //! accepted [`Action`] advances exactly one tick, and a rejected action changes nothing.
 //!
 //! Resolution order within a tick:
-//! 1. Reject the action if the episode has ended, or if a move would leave the grid,
-//!    enter a wall, or enter a door whose key the player does not hold.
+//! 1. Reject the action if the episode has ended, or if a move would leave the grid, enter a
+//!    wall, enter a door whose key the player does not hold, or enter a one-way tile against
+//!    its direction.
 //! 2. Advance the tick by one.
-//! 3. Apply the action: `move` relocates the player and collects an uncollected key on the
-//!    target cell; `wait` does nothing; `forfeit` ends the episode as failed immediately.
-//! 4. If the player stands on an exit and the win condition holds, the episode is won.
-//! 5. Otherwise, if the tick has reached `max_ticks`, the episode fails.
+//! 3. Apply the action: `move` resolves the whole displacement (see [`crate::movement`]:
+//!    slides and at most one portal hop are part of the same tick) and collects an
+//!    uncollected key on the final cell; `wait` does nothing; `forfeit` ends the episode as
+//!    failed immediately.
+//! 4. If the final cell is a hazard, fail immediately.
+//! 5. If the player stands on an exit and the win condition holds, the episode is won.
+//! 6. Otherwise, if the tick has reached `max_ticks`, the episode fails.
 //!
 //! Events of a tick are recorded in that same order.
 
@@ -27,6 +31,7 @@ use crate::geometry::{Direction, GridSize, Position};
 use crate::hash::{self, StateHash};
 use crate::ids::EntityId;
 use crate::layout::{self, LegendEntry};
+use crate::movement::{self, MoveBlock, MovePlan, Stop};
 use crate::replay::{REPLAY_FORMAT, REPLAY_FORMAT_VERSION, Replay, ReplayStep};
 use crate::rules::WinCondition;
 use crate::scene::Scene;
@@ -64,6 +69,8 @@ pub enum FailureReason {
     MaxTicksReached,
     /// The player forfeited.
     Forfeited,
+    /// The player entered a hazard.
+    Hazard,
 }
 
 /// State of an episode's result. Serialized with a `status` tag.
@@ -106,6 +113,10 @@ impl fmt::Display for Outcome {
                 tick,
                 reason: FailureReason::Forfeited,
             } => write!(f, "failed at tick {tick}: forfeited"),
+            Outcome::Failed {
+                tick,
+                reason: FailureReason::Hazard,
+            } => write!(f, "failed at tick {tick}: entered a hazard"),
         }
     }
 }
@@ -142,7 +153,8 @@ pub enum EventKind {
         /// Spawn position.
         player: Position,
     },
-    /// The player moved.
+    /// The player moved. `to` is the last cell physically entered: for a slide it is where
+    /// the slide stopped, and for a portal it is the portal cell (see `PortalUsed`).
     Moved {
         /// Previous cell.
         from: Position,
@@ -166,6 +178,24 @@ pub enum EventKind {
         door: EntityId,
         /// Its color.
         color: KeyColor,
+    },
+    /// The player entered a portal and was moved to its partner.
+    PortalUsed {
+        /// The portal entity that was entered.
+        portal: EntityId,
+        /// Its pair id.
+        pair: u8,
+        /// The portal cell.
+        from: Position,
+        /// The partner cell.
+        to: Position,
+    },
+    /// The player entered a hazard. A `Failed` event with reason `hazard` follows.
+    HazardEntered {
+        /// The hazard entity.
+        hazard: EntityId,
+        /// Its cell.
+        position: Position,
     },
     /// The player stepped onto an exit.
     ExitReached {
@@ -232,6 +262,22 @@ pub enum ActionError {
         door: EntityId,
         /// The key color it requires.
         required: KeyColor,
+    },
+    /// A one-way tile only allows entry from another direction.
+    #[error(
+        "moving {direction} from {from} cannot enter one-way tile {tile} at {target}; it only allows entry moving {allowed}"
+    )]
+    OneWayBlocked {
+        /// Player position.
+        from: Position,
+        /// Requested direction.
+        direction: Direction,
+        /// The one-way cell.
+        target: Position,
+        /// The tile entity.
+        tile: EntityId,
+        /// The only allowed entry direction.
+        allowed: Direction,
     },
 }
 
@@ -454,7 +500,7 @@ impl Episode {
         Direction::ALL
             .into_iter()
             .filter(|direction| {
-                self.check_move(self.state.player, *direction, self.state.inventory)
+                self.plan_move(self.state.player, *direction, self.state.inventory)
                     .is_ok()
             })
             .map(|direction| Action::Move { direction })
@@ -548,52 +594,58 @@ impl Episode {
     }
 
     /// Player spawn markers are not shown (the live player is drawn instead) and keys
-    /// disappear once collected.
+    /// disappear once collected. Terrain is always visible.
     fn is_visible(&self, kind: EntityKind) -> bool {
         match kind {
             EntityKind::Player => false,
             EntityKind::Key { color } => !self.state.inventory.contains(color),
-            EntityKind::Wall | EntityKind::Door { .. } | EntityKind::Exit => true,
+            _ => true,
         }
     }
 
-    fn check_move(
+    fn plan_move(
         &self,
         from: Position,
         direction: Direction,
         inventory: KeySet,
-    ) -> Result<(Position, Option<Occupant>), ActionError> {
-        let target = from.step(direction);
-        if !self.board.size().contains(target) {
-            return Err(ActionError::OutOfBounds {
-                from,
-                direction,
-                target,
-            });
-        }
-        let occupant = self.board.at(target);
-        match occupant {
-            Some(Occupant {
-                id,
-                kind: EntityKind::Wall,
-            }) => Err(ActionError::Blocked {
-                from,
-                direction,
-                target,
-                blocker: id,
-            }),
-            Some(Occupant {
-                id,
-                kind: EntityKind::Door { color },
-            }) if !inventory.contains(color) => Err(ActionError::DoorLocked {
-                from,
-                direction,
-                target,
-                door: id,
-                required: color,
-            }),
-            _ => Ok((target, occupant)),
-        }
+    ) -> Result<MovePlan, ActionError> {
+        movement::plan(&self.board, from, direction, inventory, None, |_| {}).map_err(|block| {
+            match block {
+                MoveBlock::OutOfBounds { target } => ActionError::OutOfBounds {
+                    from,
+                    direction,
+                    target,
+                },
+                MoveBlock::Wall { target, blocker } => ActionError::Blocked {
+                    from,
+                    direction,
+                    target,
+                    blocker,
+                },
+                MoveBlock::LockedDoor {
+                    target,
+                    door,
+                    required,
+                } => ActionError::DoorLocked {
+                    from,
+                    direction,
+                    target,
+                    door,
+                    required,
+                },
+                MoveBlock::OneWay {
+                    target,
+                    tile,
+                    allowed,
+                } => ActionError::OneWayBlocked {
+                    from,
+                    direction,
+                    target,
+                    tile,
+                    allowed,
+                },
+            }
+        })
     }
 
     /// Computes the state and events that `action` would produce, without committing.
@@ -619,30 +671,21 @@ impl Episode {
                 return Ok((next, events));
             }
             Action::Move { direction } => {
-                let (target, occupant) =
-                    self.check_move(current.player, direction, current.inventory)?;
-                next.player = target;
+                let plan = self.plan_move(current.player, direction, current.inventory)?;
+                next.player = plan.destination;
                 push(EventKind::Moved {
                     from: current.player,
-                    to: target,
+                    to: plan.last,
                     direction,
                 });
-                match occupant {
-                    Some(Occupant {
-                        id,
-                        kind: EntityKind::Key { color },
-                    }) if !next.inventory.contains(color) => {
+                match plan.stop {
+                    Stop::Key { id, color } if !next.inventory.contains(color) => {
                         next.inventory.insert(color);
                         push(EventKind::KeyCollected { key: id, color });
                     }
-                    Some(Occupant {
-                        id,
-                        kind: EntityKind::Door { color },
-                    }) => push(EventKind::DoorPassed { door: id, color }),
-                    Some(Occupant {
-                        id,
-                        kind: EntityKind::Exit,
-                    }) => {
+                    Stop::Key { .. } => {}
+                    Stop::Door { id, color } => push(EventKind::DoorPassed { door: id, color }),
+                    Stop::Exit { id } => {
                         push(EventKind::ExitReached { exit: id });
                         let missing = self.required_keys.difference(next.inventory);
                         if !missing.is_empty() {
@@ -652,7 +695,23 @@ impl Episode {
                             });
                         }
                     }
-                    _ => {}
+                    Stop::Portal { id, pair, to } => push(EventKind::PortalUsed {
+                        portal: id,
+                        pair,
+                        from: plan.last,
+                        to,
+                    }),
+                    Stop::Hazard { id } => {
+                        push(EventKind::HazardEntered {
+                            hazard: id,
+                            position: plan.last,
+                        });
+                        let reason = FailureReason::Hazard;
+                        next.outcome = Outcome::Failed { tick, reason };
+                        push(EventKind::Failed { reason });
+                        return Ok((next, events));
+                    }
+                    Stop::None => {}
                 }
             }
         }
@@ -902,5 +961,201 @@ mod tests {
         let scene = scene_from(&["..E"], rules(10, WinCondition::ReachExit));
         let error = Episode::start(&scene).expect_err("no player");
         assert_eq!(error.issues.len(), 1);
+    }
+
+    #[test]
+    fn ice_slides_until_a_wall_for_one_tick() {
+        let scene = scene_from(&["@~~~#E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        let step = episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(step.tick, 1, "a whole slide is one action");
+        assert_eq!(episode.state().player, Position::new(3, 0));
+        assert!(matches!(
+            step.events[0].kind,
+            EventKind::Moved {
+                to,
+                direction: Direction::East,
+                ..
+            } if to == Position::new(3, 0)
+        ));
+        assert!(matches!(
+            episode.apply(mv(EAST)),
+            Err(ActionError::Blocked { .. })
+        ));
+    }
+
+    #[test]
+    fn ice_slides_across_floor_and_stops_on_a_key() {
+        let scene = scene_from(&["@~.r.E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        let step = episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(episode.state().player, Position::new(3, 0));
+        assert!(step.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::KeyCollected {
+                color: KeyColor::Red,
+                ..
+            }
+        )));
+        assert!(step.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::Moved {
+                to,
+                ..
+            } if to == Position::new(3, 0)
+        )));
+    }
+
+    #[test]
+    fn sliding_through_an_aligned_one_way_and_stopping_at_a_wrong_way() {
+        let aligned = scene_from(&["@~>#E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&aligned).expect("playable");
+        episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(
+            episode.state().player,
+            Position::new(2, 0),
+            "an aligned one-way does not stop a slide"
+        );
+
+        let wrong_way = scene_from(&["@~<#E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&wrong_way).expect("playable");
+        episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(
+            episode.state().player,
+            Position::new(1, 0),
+            "the slide stops before entering the wrong-way tile"
+        );
+        assert!(matches!(
+            episode.apply(mv(EAST)),
+            Err(ActionError::OneWayBlocked {
+                allowed: Direction::West,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn ice_sliding_into_a_hazard_fails_immediately() {
+        let scene = scene_from(&["@~!#E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        let step = episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(
+            step.outcome,
+            Outcome::Failed {
+                tick: 1,
+                reason: FailureReason::Hazard
+            }
+        );
+        assert!(step.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::HazardEntered {
+                position,
+                ..
+            } if position == Position::new(2, 0)
+        )));
+        assert!(matches!(
+            step.events.last(),
+            Some(Event {
+                kind: EventKind::Failed {
+                    reason: FailureReason::Hazard
+                },
+                ..
+            })
+        ));
+        assert!(episode.legal_actions().is_empty());
+    }
+
+    #[test]
+    fn a_portal_stops_a_slide_and_does_not_resume_on_the_partner() {
+        let scene = scene_from(&["@~0..E", "##0###"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        let step = episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(step.tick, 1);
+        assert_eq!(episode.state().player, Position::new(2, 1));
+        assert!(step.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::Moved {
+                to,
+                ..
+            } if to == Position::new(2, 0)
+        )));
+        assert!(step.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::PortalUsed {
+                pair: 0,
+                from,
+                to,
+                ..
+            } if from == Position::new(2, 0) && to == Position::new(2, 1)
+        )));
+    }
+
+    #[test]
+    fn a_portal_can_shortcut_a_wall_and_win() {
+        let scene = scene_from(&["@.0#E", "####0"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        assert_eq!(
+            episode.apply(mv(EAST)).expect("floor").outcome,
+            Outcome::InProgress
+        );
+        assert_eq!(
+            episode.apply(mv(EAST)).expect("portal").outcome,
+            Outcome::InProgress
+        );
+        assert_eq!(episode.state().player, Position::new(4, 1));
+        assert_eq!(
+            episode.apply(mv(Direction::North)).expect("exit").outcome,
+            Outcome::Won { tick: 3 }
+        );
+    }
+
+    #[test]
+    fn portal_pairs_must_be_complete_to_start() {
+        let unpaired = scene_from(&["@.0E"], rules(10, WinCondition::ReachExit));
+        let error = Episode::start(&unpaired).expect_err("unpaired portal");
+        assert!(
+            error
+                .issues
+                .iter()
+                .any(|issue| issue.code == validation::IssueCode::PortalUnpaired),
+            "{:?}",
+            error.issues
+        );
+
+        let overpaired = scene_from(&["@000E"], rules(10, WinCondition::ReachExit));
+        let error = Episode::start(&overpaired).expect_err("three portals");
+        assert!(
+            error
+                .issues
+                .iter()
+                .any(|issue| issue.code == validation::IssueCode::PortalOverpaired),
+            "{:?}",
+            error.issues
+        );
+    }
+
+    fn terrain_scripted_episode() -> Episode {
+        let scene = scene_from(&["@.0#E", "####0"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        for action in [mv(EAST), mv(EAST), mv(Direction::North)] {
+            episode.apply(action).expect("legal");
+        }
+        episode
+    }
+
+    #[test]
+    fn terrain_episodes_round_trip_through_replays() {
+        use crate::replay::{self, Replay};
+
+        let episode = terrain_scripted_episode();
+        assert_eq!(episode.outcome(), Outcome::Won { tick: 3 });
+        let replay = episode.to_replay(Some("portal shortcut".to_owned()));
+        let json = serde_json::to_string(&replay).expect("serializable");
+        let parsed: Replay = serde_json::from_str(&json).expect("parsable");
+        let verification = replay::verify(&parsed).expect("compatible replay");
+        assert!(verification.verified, "{verification:?}");
+        assert_eq!(verification.steps_checked, 3);
+        assert_eq!(verification.reproduced_outcome, Outcome::Won { tick: 3 });
+        assert_eq!(verification.reproduced_final_hash, episode.current_hash());
     }
 }

@@ -330,6 +330,79 @@ fn invalid_actions_leave_the_episode_unchanged_and_explain_why() {
 }
 
 #[test]
+fn terrain_slides_portals_hazards_and_one_way_errors_cross_the_protocol() {
+    let mut session = Session::author();
+    session.ok(
+        "project.create",
+        json!({"name": "terrain", "expected_revision": 0}),
+    );
+    let rules = json!({"max_ticks": 10, "win_condition": "reach_exit"});
+    session.ok(
+        "scene.create",
+        json!({
+            "name": "portal",
+            "expected_revision": session.revision(),
+            "layout": ["@.0#E", "####0"],
+            "rules": rules,
+        }),
+    );
+    session.ok("episode.start", json!({"scene": "portal"}));
+    assert_eq!(
+        session.act(json!({"type": "move", "direction": "east"}))["tick"],
+        1
+    );
+    let hop = session.act(json!({"type": "move", "direction": "east"}));
+    assert_eq!(hop["tick"], 2);
+    assert!(
+        hop["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .any(|event| {
+                event["type"] == "portal_used"
+                    && event["pair"] == 0
+                    && event["to"] == json!({"x": 4, "y": 1})
+            })
+    );
+    let win = session.act(json!({"type": "move", "direction": "north"}));
+    assert_eq!(win["outcome"], json!({"status": "won", "tick": 3}));
+
+    session.ok(
+        "scene.create",
+        json!({
+            "name": "hazard",
+            "expected_revision": session.revision(),
+            "layout": ["@!E"],
+            "rules": rules,
+        }),
+    );
+    session.ok("episode.start", json!({"scene": "hazard"}));
+    let lost = session.act(json!({"type": "move", "direction": "east"}));
+    assert_eq!(
+        lost["outcome"],
+        json!({"status": "failed", "tick": 1, "reason": "hazard"})
+    );
+
+    session.ok(
+        "scene.create",
+        json!({
+            "name": "one_way",
+            "expected_revision": session.revision(),
+            "layout": ["@<E"],
+            "rules": rules,
+        }),
+    );
+    session.ok("episode.start", json!({"scene": "one_way"}));
+    let blocked = session.err(
+        "episode.act",
+        json!({"action": {"type": "move", "direction": "east"}}),
+    );
+    assert_eq!(blocked["code"], "one_way_blocked");
+    assert_eq!(blocked["details"]["allowed_direction"], "west");
+    assert_eq!(blocked["details"]["tick"], 0);
+}
+
+#[test]
 fn player_sessions_cannot_author_restore_or_escape_their_scene() {
     let mut player = Session::player("key_vault", "key_vault");
     for (operation, arguments) in [
@@ -642,6 +715,35 @@ fn discover_publishes_every_operation_with_examples_and_schemas() {
             .map(|s| s.starts_with("Fully observable")),
         Some(true)
     );
+    let kinds: Vec<&str> = discovered["game"]["entity_kinds"]
+        .as_array()
+        .expect("entity kinds")
+        .iter()
+        .map(|k| k["kind"].as_str().expect("kind name"))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "player", "wall", "key", "door", "exit", "ice", "one_way", "hazard", "portal"
+        ]
+    );
+    let failures: Vec<&str> = discovered["game"]["failure_conditions"]
+        .as_array()
+        .expect("failure conditions")
+        .iter()
+        .map(|f| f["name"].as_str().expect("failure name"))
+        .collect();
+    assert_eq!(failures, vec!["max_ticks_reached", "forfeited", "hazard"]);
+    let glyphs = discovered["game"]["ascii_legend"]
+        .as_array()
+        .expect("legend")
+        .iter()
+        .map(|entry| entry["glyph"].as_str().expect("glyph"))
+        .collect::<Vec<_>>();
+    for glyph in ["~", "!", "^", ">", "v", "<", "0", "9"] {
+        assert!(glyphs.contains(&glyph), "legend is missing {glyph}");
+    }
+    assert_eq!(discovered["constraints"]["max_portal_pairs"], json!(10));
 
     let one = author.ok("discover", json!({"operation": "scene.apply_batch"}));
     let schema = &one["operations"][0]["arguments_schema"];

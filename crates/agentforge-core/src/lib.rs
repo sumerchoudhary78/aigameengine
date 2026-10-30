@@ -33,5 +33,7 @@ pub mod replay;
 pub mod rules;
 pub mod scene;
 
+pub(crate) mod movement;
+
 /// Version of this engine build, recorded in saved projects and replays.
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");

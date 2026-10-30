@@ -233,6 +233,11 @@
             "const": "duplicate_key_color"
           },
           {
+            "description": "A portal pair id must be between 0 and 9.",
+            "type": "string",
+            "const": "invalid_portal_pair"
+          },
+          {
             "description": "Labels are 1-64 characters without control characters.",
             "type": "string",
             "const": "invalid_label"
@@ -271,6 +276,11 @@
             "description": "A wall occupies the move target.",
             "type": "string",
             "const": "move_blocked"
+          },
+          {
+            "description": "The move target is a one-way tile that allows entry only from another direction.",
+            "type": "string",
+            "const": "one_way_blocked"
           },
           {
             "description": "The move target is a door whose key the player does not hold.",

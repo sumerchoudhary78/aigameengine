@@ -113,6 +113,11 @@ pub(crate) fn scene_error(error: SceneError) -> ApiError {
                 .hint("Use another color; one key opens every door of its color.")
         }
         SceneError::InvalidLabel { .. } => ApiError::new(ErrorCode::InvalidLabel, message),
+        SceneError::InvalidPortalPair { pair } => {
+            ApiError::new(ErrorCode::InvalidPortalPair, message)
+                .with("pair", pair)
+                .hint("Pair ids are 0-9, so a scene has at most ten portal pairs.")
+        }
         SceneError::InvalidRules { field, .. } => {
             ApiError::new(ErrorCode::InvalidRules, message).with("field", field)
         }
@@ -242,6 +247,21 @@ pub(crate) fn action_error(error: ActionError, episode: &Episode) -> ApiError {
             )
             .hint(hint)
         }
+        ActionError::OneWayBlocked {
+            from,
+            direction,
+            target,
+            tile,
+            allowed,
+        } => with_legal(
+            ApiError::new(ErrorCode::OneWayBlocked, message)
+                .with("from", from)
+                .with("direction", direction)
+                .with("target", target)
+                .with("tile", tile)
+                .with("allowed_direction", allowed),
+        )
+        .hint("This tile can only be entered while moving in allowed_direction."),
     }
 }
 

@@ -6,6 +6,10 @@
 //! | `#` | wall |
 //! | `@` | player |
 //! | `E` | exit |
+//! | `~` | ice |
+//! | `^ > v <` | one-way tile allowing entry north, east, south or west |
+//! | `!` | hazard |
+//! | `0`-`9` | portal with pair id 0-9 |
 //! | `r g b y p o c w` | key (red, green, blue, yellow, purple, orange, cyan, white) |
 //! | `R G B Y P O C W` | door of the matching color |
 
@@ -13,7 +17,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::entity::{EntityKind, KeyColor};
-use crate::geometry::{GridSize, Position};
+use crate::geometry::{Direction, GridSize, Position};
 
 /// Empty floor.
 pub const FLOOR: char = '.';
@@ -25,6 +29,44 @@ pub const WALL: char = '#';
 pub const PLAYER: char = '@';
 /// Exit.
 pub const EXIT: char = 'E';
+/// Ice.
+pub const ICE: char = '~';
+/// Hazard.
+pub const HAZARD: char = '!';
+
+/// Glyph of a one-way tile allowing entry while moving in `direction`.
+pub const fn one_way_glyph(direction: Direction) -> char {
+    match direction {
+        Direction::North => '^',
+        Direction::East => '>',
+        Direction::South => 'v',
+        Direction::West => '<',
+    }
+}
+
+/// Glyph of a portal pair. Pair ids outside `0..=9` have no glyph.
+pub const fn portal_glyph(pair: u8) -> char {
+    match pair {
+        0 => '0',
+        1 => '1',
+        2 => '2',
+        3 => '3',
+        4 => '4',
+        5 => '5',
+        6 => '6',
+        7 => '7',
+        8 => '8',
+        9 => '9',
+        _ => '?',
+    }
+}
+
+/// Portal pair id denoted by a digit glyph.
+pub fn portal_pair(glyph: char) -> Option<u8> {
+    glyph
+        .to_digit(10)
+        .and_then(|digit| u8::try_from(digit).ok())
+}
 
 /// A parsed layout: grid size plus the entities to create, in row-major order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +129,21 @@ pub fn glyph_kind(glyph: char) -> Option<Option<EntityKind>> {
         WALL => Some(Some(EntityKind::Wall)),
         PLAYER => Some(Some(EntityKind::Player)),
         EXIT => Some(Some(EntityKind::Exit)),
+        ICE => Some(Some(EntityKind::Ice)),
+        HAZARD => Some(Some(EntityKind::Hazard)),
+        '^' => Some(Some(EntityKind::OneWay {
+            direction: Direction::North,
+        })),
+        '>' => Some(Some(EntityKind::OneWay {
+            direction: Direction::East,
+        })),
+        'v' => Some(Some(EntityKind::OneWay {
+            direction: Direction::South,
+        })),
+        '<' => Some(Some(EntityKind::OneWay {
+            direction: Direction::West,
+        })),
+        other if let Some(pair) = portal_pair(other) => Some(Some(EntityKind::Portal { pair })),
         other => KeyColor::from_key_glyph(other)
             .map(|color| Some(EntityKind::Key { color }))
             .or_else(|| {
@@ -156,7 +213,27 @@ pub fn legend() -> Vec<LegendEntry> {
         entry(WALL, "wall"),
         entry(PLAYER, "player"),
         entry(EXIT, "exit"),
+        entry(
+            ICE,
+            "ice (entering it slides the player in the direction of travel)",
+        ),
     ];
+    for direction in Direction::ALL {
+        entries.push(entry(
+            one_way_glyph(direction),
+            &format!("one-way tile: entry allowed only while moving {direction}"),
+        ));
+    }
+    entries.push(entry(
+        HAZARD,
+        "hazard (entering it fails the episode immediately)",
+    ));
+    for pair in 0..=9 {
+        entries.push(entry(
+            portal_glyph(pair),
+            &format!("portal pair {pair} (teleports to the other {pair})"),
+        ));
+    }
     for color in KeyColor::ALL {
         entries.push(entry(color.key_glyph(), &format!("{color} key")));
     }
@@ -220,5 +297,50 @@ mod tests {
             parsed.cells.iter().map(|(p, kind)| (*p, kind.glyph())),
         );
         assert_eq!(rendered, source);
+    }
+
+    #[test]
+    fn terrain_glyphs_parse_and_render_round_trip() {
+        let source = rows(&["~^>v<!0123456789"]);
+        let parsed = parse(&source).expect("valid terrain");
+        assert_eq!(parsed.cells[0].1, EntityKind::Ice);
+        assert_eq!(
+            parsed.cells[1].1,
+            EntityKind::OneWay {
+                direction: Direction::North
+            }
+        );
+        assert_eq!(
+            parsed.cells[2].1,
+            EntityKind::OneWay {
+                direction: Direction::East
+            }
+        );
+        assert_eq!(
+            parsed.cells[3].1,
+            EntityKind::OneWay {
+                direction: Direction::South
+            }
+        );
+        assert_eq!(
+            parsed.cells[4].1,
+            EntityKind::OneWay {
+                direction: Direction::West
+            }
+        );
+        assert_eq!(parsed.cells[5].1, EntityKind::Hazard);
+        assert_eq!(parsed.cells[6].1, EntityKind::Portal { pair: 0 });
+        assert_eq!(parsed.cells[15].1, EntityKind::Portal { pair: 9 });
+        let rendered = render(
+            parsed.size,
+            parsed.cells.iter().map(|(p, kind)| (*p, kind.glyph())),
+        );
+        assert_eq!(rendered, source);
+        assert_eq!(portal_pair('7'), Some(7));
+        assert_eq!(portal_pair('x'), None);
+        assert_eq!(portal_glyph(42), '?');
+        assert!(legend().iter().any(|e| e.glyph == "~"));
+        assert!(legend().iter().any(|e| e.glyph == "!"));
+        assert!(legend().iter().any(|e| e.glyph == "9"));
     }
 }

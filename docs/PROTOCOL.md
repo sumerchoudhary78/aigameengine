@@ -103,14 +103,18 @@ the candidates cover every entity whose single removal could matter. When
 Grid coordinates are integers: x grows east, y grows south, and (0, 0) is the north-west
 corner. Each cell holds at most one entity. Entity kinds are `player` (one spawn), `wall`,
 `key` (colored, collected on entry, never consumed, at most one per color), `door`
-(passable while holding the matching key) and `exit`. Win conditions are `reach_exit` and
-`collect_all_keys_then_exit`. Failure happens at `max_ticks` or on `forfeit`. ASCII glyphs:
-`#` wall, `@` player, `E` exit, lowercase `r g b y p o c w` keys, uppercase `R G B Y P O C W`
-doors, `.` floor. The game is fully observable.
+(passable while holding the matching key), `exit`, `ice`, `one_way` (entry direction),
+`hazard` (entering fails the episode) and `portal` (pair id 0-9; exactly two per pair).
+Entering ice starts a slide; the whole slide is part of the move and costs one tick. Win
+conditions are `reach_exit` and `collect_all_keys_then_exit`. Failure happens at
+`max_ticks`, on `forfeit`, or on entering a hazard. ASCII glyphs: `#` wall, `@` player,
+`E` exit, `~` ice, `!` hazard, `^ > v <` one-way entry directions, `0`-`9` portals,
+lowercase `r g b y p o c w` keys, uppercase `R G B Y P O C W` doors, `.` floor. The game is
+fully observable.
 
 ## Limits
 
 Published by `discover` under `constraints`: grids up to 64×64, `max_ticks` up to 10000,
-8 key colors, 4096 edits per batch, labels and names up to 64 characters, 64 snapshots per
-session, 1000 events per query, 256 assertions per call, 64 verified repair candidates per
-reachability query, and 1 MiB per request line.
+8 key colors, 10 portal pair ids, 4096 edits per batch, labels and names up to 64
+characters, 64 snapshots per session, 1000 events per query, 256 assertions per call, 64
+verified repair candidates per reachability query, and 1 MiB per request line.

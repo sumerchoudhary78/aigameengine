@@ -117,11 +117,15 @@ simulation state and no authorization: the role still comes from the launcher.
 `episode.reset` replays the same frozen scene. Turn order is specified in
 `agentforge_core::episode` and published by `discover` (`game.tick_resolution_order`):
 
-1. reject if ended, out of bounds, wall, or locked door (nothing changes);
+1. reject if ended, or if the first cell of a move is outside the grid, a wall, a locked
+   door, or a one-way tile facing against the move (nothing changes);
 2. tick += 1;
-3. apply: move (collect an uncollected key on entry), wait, or forfeit (fails immediately);
-4. win if on an exit and the win condition holds;
-5. otherwise fail if `tick == max_ticks`.
+3. apply: move resolves the whole displacement (floor and ice crossings, at most one portal
+   hop, collecting an uncollected key on the final cell), wait, or forfeit (fails
+   immediately);
+4. fail immediately if the final cell is a hazard;
+5. win if on an exit and the win condition holds;
+6. otherwise fail if `tick == max_ticks`.
 
 There are no autonomous entities, timers or randomness, so no simulation work is pending
 between ticks. Snapshots therefore capture entities, rules, the ID allocator, tick, player,
@@ -163,9 +167,10 @@ u32 max_ticks, u8 win_condition        (1 reach_exit, 2 collect_all_keys_then_ex
 u32 next_entity_id
 u32 entity_count
 per entity, ascending id:
-  u32 id, u8 kind                      (1 player, 2 wall, 3 key, 4 door, 5 exit)
-  u8 color                             (0 none, else 1 + index in red, green, blue,
-                                        yellow, purple, orange, cyan, white)
+  u32 id, u8 kind                      (1 player, 2 wall, 3 key, 4 door, 5 exit,
+                                        6 ice, 7 one_way, 8 hazard, 9 portal)
+  u8 attribute                         (0 none; key/door 1 + color index;
+                                        one_way 1 + direction index; portal 1 + pair id)
   i32 x, i32 y
 ```
 
@@ -179,7 +184,8 @@ str("agentforge.state.v1")
 u32 tick
 i32 player_x, i32 player_y
 u8 inventory bitmask                   (bit i = color index i)
-u8 outcome                             (0 in progress, 1 won, 2 failed: max_ticks, 3 failed: forfeited)
+u8 outcome                             (0 in progress, 1 won, 2 failed: max_ticks,
+                                       3 failed: forfeited, 4 failed: hazard)
 u32 outcome_tick                       (0 while in progress)
 ```
 
@@ -214,34 +220,45 @@ the replay starts from that project's scene.
 
 `analysis::reachability` answers two questions separately:
 
-- **geometric**: walls block; doors are open; keys, win condition and `max_ticks` are
-  ignored. If this fails, walls are the cause.
-- **gameplay**: breadth-first search over (cell, keys held) with the real rules. With at most
-  64×64 cells and 8 key colors, the search visits at most about a million states and is run
-  to exhaustion, so "unreachable" is a proof. Non-consumable colored keys are what keep it
-  exhaustive and bounded; consumable keys would make the state space grow exponentially with
-  the number of doors.
+- **geometric**: walls block; doors and terrain are open; keys, win condition and
+  `max_ticks` are ignored. It is a walls-only diagnostic, not an oracle: a portal can make
+  gameplay reachable while this is not, and a wrong-way one-way can do the reverse.
+- **gameplay**: breadth-first search over (cell, keys held) with the real rules, including
+  slides, one-way entry, portal hops and fatal hazards. Terrain is static, so it adds no
+  state dimension: with at most 64×64 cells and 8 key colors, the search visits at most
+  about a million states and is run to exhaustion, so "unreachable" is a proof.
+  Non-consumable colored keys are what keep it exhaustive and bounded; consumable keys would
+  make the state space grow exponentially with the number of doors.
+
+A move resolves through `movement::plan`, the same function episodes use, so play and
+analysis cannot disagree. Entering ice starts a slide that continues until a wall, locked
+door, wrong-way one-way, edge or object stops it; objects stop slides, terrain does not.
+Portals are one hop and end a displacement; hazards are entered and fail the episode. The
+search never expands a hazard or a winning exit state.
 
 Stepping onto an exit while the win condition holds ends the episode, so the search never
 continues past such a state. A route to a cell beyond an exit is therefore correctly
 unreachable, and a key behind a winning exit is correctly unobtainable.
 
-When gameplay fails, the report names the **blockers**: walls next to cells the player can
-still move on from, doors whose key is missing or unreachable, required keys that cannot be
-reached (`collect_all_keys_then_exit`), and exits that end the episode before a cell
-target. **Repair candidates** are every entity whose single removal could change the search
-result:
+When gameplay fails, the report names the **blockers**: walls, wrong-way one-way tiles and
+hazards next to cells the player can still move from or slide through; doors whose key is
+missing or unreachable; required keys that cannot be reached (`collect_all_keys_then_exit`);
+and exits that end the episode before a cell target. **Repair candidates** are every entity
+whose single removal could change the search result:
 
-- walls and doors adjacent to cells the player can still move on from (the search never
-  tries to enter any other wall or door);
+- walls, doors, keys, exits, wrong-way one-way tiles and hazards adjacent to active cells
+  (the search never tries to enter any other ones);
+- ice tiles that an active move enters (removing one changes where a slide stops);
 - every key, when the win condition requires all keys (removing a key can only drop a
   requirement or close doors);
 - exits reached in a winning state, for cell targets.
 
-Each candidate (up to 64 per query) is verified by re-running the search without it, and
-only verified repairs are listed. Because the candidate set covers everything that could
-matter, "none of the candidates works" after an exhaustive evaluation proves that at least
-two changes are needed. The report never guesses a culprit.
+Portals are deliberately excluded: a valid portal repair changes both members of a pair, so
+it is already a two-entity change outside the single-removal guarantee. Each candidate (up to
+64 per query) is verified by re-running the search without it, and only verified repairs are
+listed. Because the candidate set covers everything that could matter, "none of the
+candidates works" after an exhaustive evaluation proves that at least two changes are
+needed. The report never guesses a culprit.
 
 ## Schemas and documentation without drift
 
