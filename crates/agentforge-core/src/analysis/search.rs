@@ -2,16 +2,21 @@
 //!
 //! Neighbours are expanded in [`Direction::ALL`] order and the frontier is a FIFO queue, so
 //! every search is deterministic and returns a shortest path. Gameplay transitions come from
-//! [`crate::movement::plan`], the same function episodes use, so terrain cannot make play and
-//! analysis disagree.
+//! [`crate::movement::plan`], the same function episodes use, so terrain and gates cannot
+//! make play and analysis disagree.
+//!
+//! The gameplay search explores `(cell, keys held, gate state)`; its state space is checked
+//! against [`super::MAX_EXHAUSTIVE_STATES`] before allocation, and it refuses with an error
+//! rather than guessing when the bound is exceeded.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use super::MAX_EXHAUSTIVE_STATES;
 use crate::board::{Board, Occupant};
-use crate::entity::{EntityKind, KeyColor, KeySet};
+use crate::entity::{EntityKind, GateSet, KeyColor, KeySet};
 use crate::geometry::{Direction, Position};
 use crate::ids::EntityId;
-use crate::movement::{self, Stop};
+use crate::movement::{self, MoveBlock, Stop};
 
 /// Target of a gameplay search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +27,15 @@ pub(crate) enum Goal {
     Objective,
 }
 
+/// Why a gameplay search refused to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StateSpaceTooLarge {
+    /// Worst-case number of `(cell, keys, gates)` states.
+    pub states: u64,
+    /// The cap the search is bound by.
+    pub cap: u64,
+}
+
 /// Result of [`gameplay`].
 #[derive(Debug, Clone)]
 pub(crate) struct GameplaySearch {
@@ -29,25 +43,34 @@ pub(crate) struct GameplaySearch {
     pub moves: Option<Vec<Direction>>,
     /// Key colors picked up along `moves`, in pickup order.
     pub keys_on_path: Vec<KeyColor>,
-    /// Cells occupied in at least one reachable (cell, keys) state.
+    /// Cells occupied in at least one reachable `(cell, keys, gates)` state.
     pub reachable_cells: Vec<bool>,
     /// Cells from which a move was attempted, plus every cell a legal move entered. Used to
     /// decide which barriers and ice tiles could matter as repair candidates.
     pub active_cells: Vec<bool>,
     /// Exits reached in a winning state, which ends the episode there.
     pub terminal_exits: BTreeSet<EntityId>,
+    /// Gate entities that blocked at least one move attempted from a reachable state.
+    pub blocked_gates: BTreeSet<EntityId>,
     /// Key colors held in at least one reachable state.
     pub obtainable: KeySet,
-    /// Number of (cell, keys) states expanded.
+    /// Number of `(cell, keys, gates)` states expanded.
     pub explored_states: u32,
 }
 
-/// Searches (cell, keys-held) states under the gameplay rules: terrain follows
-/// [`movement::plan`], walls block, doors need their key, keys are collected on entry and
-/// never consumed, hazards are failure edges and are never expanded, and stepping onto an
+/// Searches `(cell, keys-held, gate state)` states under the gameplay rules: terrain and
+/// gate passability follow [`movement::plan`], walls block, doors need their key, keys are
+/// collected on entry and never consumed, entering a switch toggles its group in the
+/// successor state (the plan reads the gate state as of the start of the action, exactly
+/// like an episode), hazards are failure edges and are never expanded, and stepping onto an
 /// exit while the win condition holds ends the episode, so such states are never expanded.
-/// The whole reachable state space is explored (at most 4096 cells x 256 key sets), so a
-/// `None` path proves the goal unreachable and the closure fields are complete.
+/// Gate state is packed only over groups that have at least one gate; a switch of a
+/// gate-less group cannot change any transition. With fixed bounds the space is at most
+/// 4096 cells x 256 key sets x 16 gate masks, and every state space is additionally capped
+/// at [`MAX_EXHAUSTIVE_STATES`]: beyond the cap the search returns
+/// [`StateSpaceTooLarge`] instead of a guessed verdict; within it, the whole reachable
+/// state space is explored, so a `None` path proves the goal unreachable and the closure
+/// fields are complete.
 ///
 /// `collect_all` selects the win condition; `removed` names an entity to treat as absent,
 /// which is how repairs are verified.
@@ -57,7 +80,7 @@ pub(crate) fn gameplay(
     goal: Goal,
     collect_all: bool,
     removed: Option<EntityId>,
-) -> GameplaySearch {
+) -> Result<GameplaySearch, StateSpaceTooLarge> {
     let size = board.size();
     let cells = size.cell_count();
     let occupant = |index: usize| board.at_index(index).filter(|o| Some(o.id) != removed);
@@ -75,8 +98,41 @@ pub(crate) fn gameplay(
     present.sort();
     present.dedup();
     let bits = present.len();
-    let full_mask = (1usize << bits) - 1;
     let bit_of = |color: KeyColor| present.iter().position(|c| *c == color);
+
+    // Compact gate bits: only groups with at least one gate get a bit.
+    let mut gate_groups: Vec<u8> = (0..cells)
+        .filter_map(|index| match occupant(index) {
+            Some(Occupant {
+                kind: EntityKind::Gate { group },
+                ..
+            }) => Some(group),
+            _ => None,
+        })
+        .collect();
+    gate_groups.sort_unstable();
+    gate_groups.dedup();
+    let gate_bits = gate_groups.len();
+
+    // Refusal is a protocol decision: report the bound instead of a heuristic verdict. Both
+    // dimensions are compressed to the entities present, so the bound is exact for the
+    // scene.
+    let total_bits = bits + gate_bits;
+    let states = (cells as u64) << total_bits;
+    let cap = MAX_EXHAUSTIVE_STATES as u64;
+    if states > cap {
+        return Err(StateSpaceTooLarge { states, cap });
+    }
+
+    let full_key_mask = (1usize << bits) - 1;
+    let full_gate_mask = (1usize << gate_bits) - 1;
+    let full_state_mask = (1usize << total_bits) - 1;
+    let gate_bit_of = |group: u8| {
+        gate_groups
+            .iter()
+            .position(|g| *g == group)
+            .map(|bit| 1usize << bit)
+    };
 
     let mut result = GameplaySearch {
         moves: None,
@@ -84,11 +140,12 @@ pub(crate) fn gameplay(
         reachable_cells: vec![false; cells],
         active_cells: vec![false; cells],
         terminal_exits: BTreeSet::new(),
+        blocked_gates: BTreeSet::new(),
         obtainable: KeySet::EMPTY,
         explored_states: 0,
     };
     let Some(start_index) = size.index(start) else {
-        return result;
+        return Ok(result);
     };
     let mut start_mask = 0usize;
     if let Some(Occupant {
@@ -99,13 +156,16 @@ pub(crate) fn gameplay(
     {
         start_mask |= 1 << bit;
     }
+    // Every gate starts closed, and unlike a key, standing on a switch at tick 0 toggles
+    // nothing (only an entry does).
+    let start_gates = 0usize;
 
     // An exit wins (and ends the episode) when the win condition holds for `mask`.
     let winning_exit = |index: usize, mask: usize| match occupant(index) {
         Some(Occupant {
             id,
             kind: EntityKind::Exit,
-        }) if !collect_all || mask == full_mask => Some(id),
+        }) if !collect_all || mask == full_key_mask => Some(id),
         _ => None,
     };
     let is_goal = |index: usize, mask: usize| match goal {
@@ -114,20 +174,21 @@ pub(crate) fn gameplay(
     };
 
     const UNVISITED: usize = usize::MAX;
-    let mut parent = vec![UNVISITED; cells << bits];
-    let mut via = vec![0u8; cells << bits];
+    let mut parent = vec![UNVISITED; cells << total_bits];
+    let mut via = vec![0u8; cells << total_bits];
     let mut obtainable_mask = 0usize;
     let mut goal_state = None;
-    let start_state = (start_index << bits) | start_mask;
+    let start_state = (start_index << total_bits) | (start_mask << gate_bits) | start_gates;
     parent[start_state] = start_state;
     result.active_cells[start_index] = true;
     let mut queue = VecDeque::from([start_state]);
 
     while let Some(state) = queue.pop_front() {
         result.explored_states += 1;
-        let (index, mask) = (state >> bits, state & full_mask);
+        let rest = state & full_state_mask;
+        let index = state >> total_bits;
+        let mask = rest >> gate_bits;
         result.reachable_cells[index] = true;
-        obtainable_mask |= mask;
         if goal_state.is_none() && is_goal(index, mask) {
             goal_state = Some(state);
         }
@@ -141,10 +202,18 @@ pub(crate) fn gameplay(
         }
         result.active_cells[index] = true;
         let here = size.position(index);
+        let gates_mask = rest & full_gate_mask;
+        obtainable_mask |= mask;
         let mut held = KeySet::EMPTY;
         for (bit, color) in present.iter().enumerate() {
             if mask & (1 << bit) != 0 {
                 held.insert(*color);
+            }
+        }
+        let mut gates = GateSet::EMPTY;
+        for (bit, group) in gate_groups.iter().enumerate() {
+            if gates_mask & (1 << bit) != 0 {
+                gates = gates.toggled(*group);
             }
         }
         for (direction_index, direction) in Direction::ALL.into_iter().enumerate() {
@@ -152,13 +221,19 @@ pub(crate) fn gameplay(
             // safe stack bound for a 64-cell dimension.
             let mut entered = [Position::new(0, 0); 65];
             let mut entered_count = 0usize;
-            let plan = movement::plan(board, here, direction, held, removed, |position| {
-                if let Some(slot) = entered.get_mut(entered_count) {
-                    *slot = position;
-                    entered_count += 1;
+            let attempt =
+                movement::plan(board, here, direction, held, gates, removed, |position| {
+                    if let Some(slot) = entered.get_mut(entered_count) {
+                        *slot = position;
+                        entered_count += 1;
+                    }
+                });
+            let Ok(plan) = attempt else {
+                // Evidence of a gate blocking a reachable move: the blocker report uses only
+                // gates the search actually ran into, never speculation.
+                if let Err(MoveBlock::ClosedGate { gate, .. }) = attempt {
+                    result.blocked_gates.insert(gate);
                 }
-            });
-            let Ok(plan) = plan else {
                 continue;
             };
             // Hazard moves are not expansions, but their entered cells still matter: removing
@@ -177,10 +252,19 @@ pub(crate) fn gameplay(
             {
                 next_mask |= 1 << bit;
             }
+            // The switch applies after the plan, exactly as an episode does: the successor
+            // state holds the toggled gate bit.
+            let mut next_gates_mask = gates_mask;
+            if let Stop::Switch { group, .. } = plan.stop
+                && let Some(bit) = gate_bit_of(group)
+            {
+                next_gates_mask ^= bit;
+            }
             let Some(next_index) = size.index(plan.destination) else {
                 continue;
             };
-            let next_state = (next_index << bits) | next_mask;
+            let next_state =
+                (next_index << total_bits) | (next_mask << gate_bits) | next_gates_mask;
             if parent[next_state] == UNVISITED {
                 parent[next_state] = state;
                 // Direction index is 0..4, so it always fits in a u8.
@@ -207,13 +291,15 @@ pub(crate) fn gameplay(
         result.keys_on_path = keys_along(board, start, &moves, removed);
         result.moves = Some(moves);
     }
-    result
+    Ok(result)
 }
 
 /// Key colors collected, in order, when walking `moves` from `start`.
 ///
 /// Paths come from the same search, so every step is legal; a failure would be a bug, not an
-/// input error. The loop stops rather than guessing if that invariant is ever broken.
+/// input error. The loop stops rather than guessing if that invariant is ever broken. Gate
+/// toggles are replayed along the path, so the gate state each step sees matches the search
+/// that produced the path.
 fn keys_along(
     board: &Board,
     start: Position,
@@ -221,6 +307,7 @@ fn keys_along(
     removed: Option<EntityId>,
 ) -> Vec<KeyColor> {
     let mut held = KeySet::EMPTY;
+    let mut gates = GateSet::EMPTY;
     let mut order = Vec::new();
     if let Some(Occupant {
         id,
@@ -234,10 +321,14 @@ fn keys_along(
     }
     let mut position = start;
     for direction in moves {
-        let Ok(plan) = movement::plan(board, position, *direction, held, removed, |_| {}) else {
+        let Ok(plan) = movement::plan(board, position, *direction, held, gates, removed, |_| {})
+        else {
             break;
         };
         position = plan.destination;
+        if let Stop::Switch { group, .. } = plan.stop {
+            gates = gates.toggled(group);
+        }
         if let Stop::Key { color, .. } = plan.stop
             && !held.contains(color)
         {
@@ -328,9 +419,9 @@ pub(crate) fn geometric(board: &Board, start: Position, goal: GeometricGoal) -> 
 }
 
 /// Every entity adjacent to a cell in `active_cells` that could matter as a blocker or as a
-/// single-removal repair, keyed by entity id: walls, doors, one-way tiles, hazards, keys and
-/// exits. Entities elsewhere are never the target of an attempted move, so removing them
-/// cannot change the search.
+/// single-removal repair, keyed by entity id: walls, doors, one-way tiles, hazards, keys,
+/// exits, gates and switches. Entities elsewhere are never the target of an attempted move,
+/// so removing them cannot change the search.
 pub(crate) fn adjacent_entities(
     board: &Board,
     active_cells: &[bool],
@@ -350,6 +441,8 @@ pub(crate) fn adjacent_entities(
                         | EntityKind::Exit
                         | EntityKind::OneWay { .. }
                         | EntityKind::Hazard
+                        | EntityKind::Switch { .. }
+                        | EntityKind::Gate { .. }
                 )
             {
                 candidates.insert(id, (kind, neighbour));

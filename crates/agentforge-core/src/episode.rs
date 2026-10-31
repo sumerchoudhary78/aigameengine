@@ -13,9 +13,10 @@
 //!    slides and at most one portal hop are part of the same tick) and collects an
 //!    uncollected key on the final cell; `wait` does nothing; `forfeit` ends the episode as
 //!    failed immediately.
-//! 4. If the final cell is a hazard, fail immediately.
-//! 5. If the player stands on an exit and the win condition holds, the episode is won.
-//! 6. Otherwise, if the tick has reached `max_ticks`, the episode fails.
+//! 4. If the plan stopped on a switch, toggle its gate group.
+//! 5. If the final cell is a hazard, fail immediately.
+//! 6. If the player stands on an exit and the win condition holds, the episode is won.
+//! 7. Otherwise, if the tick has reached `max_ticks`, the episode fails.
 //!
 //! Events of a tick are recorded in that same order.
 
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::validation::{self, Issue};
 use crate::board::{Board, Occupant};
-use crate::entity::{EntityKind, KeyColor, KeySet};
+use crate::entity::{EntityKind, GateSet, KeyColor, KeySet, MAX_GATE_GROUPS};
 use crate::geometry::{Direction, GridSize, Position};
 use crate::hash::{self, StateHash};
 use crate::ids::EntityId;
@@ -121,6 +122,15 @@ impl fmt::Display for Outcome {
     }
 }
 
+/// The open/closed state of one gate group present in the played scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct GateStatus {
+    /// The group id (0-3).
+    pub group: u8,
+    /// Whether the group's gates are currently open.
+    pub open: bool,
+}
+
 /// Everything about an episode that changes from tick to tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EpisodeState {
@@ -130,6 +140,8 @@ pub struct EpisodeState {
     pub player: Position,
     /// Key colors held. Keys are never consumed.
     pub inventory: KeySet,
+    /// Gate groups whose gates are open. Every group starts closed.
+    pub gates: GateSet,
     /// Result so far.
     pub outcome: Outcome,
 }
@@ -196,6 +208,15 @@ pub enum EventKind {
         hazard: EntityId,
         /// Its cell.
         position: Position,
+    },
+    /// The player entered a switch; the state is the gate state after the toggle.
+    SwitchPressed {
+        /// The switch entity.
+        switch: EntityId,
+        /// The gate group it toggles.
+        group: u8,
+        /// Whether the group's gates are open after this press.
+        open: bool,
     },
     /// The player stepped onto an exit.
     ExitReached {
@@ -279,6 +300,20 @@ pub enum ActionError {
         /// The only allowed entry direction.
         allowed: Direction,
     },
+    /// A gate's group is closed.
+    #[error("gate {gate} at {target} is closed; it belongs to gate group {group}")]
+    GateClosed {
+        /// Player position.
+        from: Position,
+        /// Requested direction.
+        direction: Direction,
+        /// The gate cell.
+        target: Position,
+        /// The gate entity.
+        gate: EntityId,
+        /// The group whose state the gate follows.
+        group: u8,
+    },
 }
 
 /// The scene is not complete enough to play (see [`validation::completeness_errors`]).
@@ -359,6 +394,9 @@ pub struct Observation {
     pub player: Position,
     /// Key colors held.
     pub inventory: Vec<KeyColor>,
+    /// Open/closed state of every gate group that appears in the scene, ascending by
+    /// group id.
+    pub gates: Vec<GateStatus>,
     /// Entities on the board, excluding the player's spawn marker and collected keys.
     pub entities: Vec<VisibleEntity>,
     /// The board as text rows (see `legend`).
@@ -400,6 +438,7 @@ impl Episode {
             tick: 0,
             player: spawn,
             inventory: KeySet::EMPTY,
+            gates: GateSet::EMPTY,
             outcome: Outcome::InProgress,
         };
         let initial_hash = hash::state_hash(&scene_digest, &state);
@@ -500,8 +539,13 @@ impl Episode {
         Direction::ALL
             .into_iter()
             .filter(|direction| {
-                self.plan_move(self.state.player, *direction, self.state.inventory)
-                    .is_ok()
+                self.plan_move(
+                    self.state.player,
+                    *direction,
+                    self.state.inventory,
+                    self.state.gates,
+                )
+                .is_ok()
             })
             .map(|direction| Action::Move { direction })
             .chain([Action::Wait, Action::Forfeit])
@@ -561,11 +605,31 @@ impl Episode {
             grid: self.scene.size(),
             player: self.state.player,
             inventory: self.state.inventory.colors(),
+            gates: self.gate_statuses(),
             ascii: layout::render(self.scene.size(), glyphs),
             entities,
             legend: layout::legend(),
             legal_actions: self.legal_actions(),
         }
+    }
+
+    /// The gate state of every group that some switch or gate belongs to, ascending.
+    fn gate_statuses(&self) -> Vec<GateStatus> {
+        let mut present = [false; MAX_GATE_GROUPS as usize];
+        for kind in self.scene.entities().map(|entity| entity.kind) {
+            if let Some(group) = kind.group() {
+                present[group as usize] = true;
+            }
+        }
+        present
+            .into_iter()
+            .enumerate()
+            .filter(|(_, present)| *present)
+            .map(|(group, _)| GateStatus {
+                group: group as u8,
+                open: self.state.gates.contains(group as u8),
+            })
+            .collect()
     }
 
     /// The replay of this episode so far.
@@ -608,9 +672,10 @@ impl Episode {
         from: Position,
         direction: Direction,
         inventory: KeySet,
+        gates: GateSet,
     ) -> Result<MovePlan, ActionError> {
-        movement::plan(&self.board, from, direction, inventory, None, |_| {}).map_err(|block| {
-            match block {
+        movement::plan(&self.board, from, direction, inventory, gates, None, |_| {}).map_err(
+            |block| match block {
                 MoveBlock::OutOfBounds { target } => ActionError::OutOfBounds {
                     from,
                     direction,
@@ -644,8 +709,19 @@ impl Episode {
                     tile,
                     allowed,
                 },
-            }
-        })
+                MoveBlock::ClosedGate {
+                    target,
+                    gate,
+                    group,
+                } => ActionError::GateClosed {
+                    from,
+                    direction,
+                    target,
+                    gate,
+                    group,
+                },
+            },
+        )
     }
 
     /// Computes the state and events that `action` would produce, without committing.
@@ -671,7 +747,8 @@ impl Episode {
                 return Ok((next, events));
             }
             Action::Move { direction } => {
-                let plan = self.plan_move(current.player, direction, current.inventory)?;
+                let plan =
+                    self.plan_move(current.player, direction, current.inventory, current.gates)?;
                 next.player = plan.destination;
                 push(EventKind::Moved {
                     from: current.player,
@@ -710,6 +787,16 @@ impl Episode {
                         next.outcome = Outcome::Failed { tick, reason };
                         push(EventKind::Failed { reason });
                         return Ok((next, events));
+                    }
+                    Stop::Switch { id, group } => {
+                        // The plan read the gate state as of the start of the action; the
+                        // toggle takes effect for later actions only.
+                        next.gates = next.gates.toggled(group);
+                        push(EventKind::SwitchPressed {
+                            switch: id,
+                            group,
+                            open: next.gates.contains(group),
+                        });
                     }
                     Stop::None => {}
                 }
@@ -1156,6 +1243,227 @@ mod tests {
         assert!(verification.verified, "{verification:?}");
         assert_eq!(verification.steps_checked, 3);
         assert_eq!(verification.reproduced_outcome, Outcome::Won { tick: 3 });
+        assert_eq!(verification.reproduced_final_hash, episode.current_hash());
+    }
+
+    #[test]
+    fn a_closed_gate_rejects_a_move_like_a_wall() {
+        let scene = scene_from(&["@)E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        let before = (
+            episode.state,
+            episode.current_hash(),
+            episode.events().len(),
+        );
+        let blocked = episode
+            .apply(mv(EAST))
+            .expect_err("gate of group 0 is closed");
+        assert!(
+            matches!(
+                blocked,
+                ActionError::GateClosed {
+                    target,
+                    gate,
+                    group: 0,
+                    ..
+                } if target == Position::new(1, 0) && gate == EntityId::new(2)
+            ),
+            "{blocked:?}"
+        );
+        assert_eq!(
+            (
+                episode.state,
+                episode.current_hash(),
+                episode.events().len()
+            ),
+            before,
+            "a rejected move changes nothing"
+        );
+        assert_eq!(episode.legal_actions(), vec![Action::Wait, Action::Forfeit]);
+    }
+
+    #[test]
+    fn a_slide_stops_before_a_closed_gate_without_entering_it() {
+        let scene = scene_from(&["@~~)E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        episode.apply(mv(EAST)).expect("legal slide");
+        assert_eq!(
+            episode.state().player,
+            Position::new(2, 0),
+            "the slide stops before the closed gate"
+        );
+        assert!(matches!(
+            episode.apply(mv(EAST)),
+            Err(ActionError::GateClosed { .. })
+        ));
+    }
+
+    #[test]
+    fn entering_a_switch_toggles_its_group_and_gates_follow() {
+        let scene = scene_from(&["@.()E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        assert_eq!(
+            episode.observation().gates,
+            vec![GateStatus {
+                group: 0,
+                open: false
+            }]
+        );
+        episode.apply(mv(EAST)).expect("floor");
+        let press = episode.apply(mv(EAST)).expect("switch of group 0");
+        assert!(
+            press.events.iter().any(|e| matches!(
+                e.kind,
+                EventKind::SwitchPressed {
+                    group: 0,
+                    open: true,
+                    ..
+                }
+            )),
+            "{:?}",
+            press.events
+        );
+        assert_eq!(episode.state().gates, GateSet::from_bits(0b0001));
+        assert_eq!(
+            episode.observation().gates,
+            vec![GateStatus {
+                group: 0,
+                open: true
+            }]
+        );
+
+        episode
+            .apply(mv(EAST))
+            .expect("open gate is passable terrain");
+        assert_eq!(episode.state().player, Position::new(3, 0));
+        episode
+            .apply(mv(Direction::West))
+            .expect("back onto the switch");
+        assert_eq!(episode.state().gates, GateSet::EMPTY, "press twice: closed");
+        assert_eq!(
+            episode.observation().gates,
+            vec![GateStatus {
+                group: 0,
+                open: false
+            }]
+        );
+        assert!(
+            matches!(episode.apply(mv(EAST)), Err(ActionError::GateClosed { .. })),
+            "the closed gate blocks again"
+        );
+    }
+
+    #[test]
+    fn toggles_require_an_entry_and_a_wait_never_toggles() {
+        let scene = scene_from(&["@.(E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        // The start stands adjacent to the switch; per the toggle timing, nothing toggles
+        // without an entry (the documented analog of an analysis `from` on a switch).
+        let waited = episode.apply(Action::Wait).expect("wait is legal");
+        assert_eq!(episode.state().gates, GateSet::EMPTY);
+        assert!(
+            !waited
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::SwitchPressed { .. }))
+        );
+    }
+
+    #[test]
+    fn a_slide_ends_on_a_switch_toggles_once_and_costs_one_tick() {
+        // The ice starts the slide; the slide passes the floor and ends on the switch.
+        let scene = scene_from(&["@~.(E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        let step = episode.apply(mv(EAST)).expect("slide onto the switch");
+        assert_eq!(step.tick, 1, "the whole slide is one action");
+        let pressed = step
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::SwitchPressed { .. }))
+            .count();
+        assert_eq!(pressed, 1, "one stop, one toggle, one event");
+        assert_eq!(episode.state().player, Position::new(3, 0));
+        assert_eq!(episode.state().gates, GateSet::from_bits(0b0001));
+    }
+
+    #[test]
+    fn a_slide_crosses_an_open_gate() {
+        // Stepping on the switch opens the gate; the following ice slide crosses the open
+        // gate (terrain) and stops on the exit.
+        let scene = scene_from(&["@(.~)E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        episode
+            .apply(mv(EAST))
+            .expect("stepping onto the switch toggles");
+        episode
+            .apply(mv(EAST))
+            .expect("floor is crossed without sliding");
+        let win = episode
+            .apply(mv(EAST))
+            .expect("the slide crosses the open gate");
+        assert_eq!(win.outcome, Outcome::Won { tick: 3 });
+        assert!(
+            win.events.iter().any(|e| matches!(
+                e.kind,
+                EventKind::Moved {
+                    to,
+                    ..
+                } if to == Position::new(5, 0)
+            )),
+            "{:?}",
+            win.events
+        );
+    }
+
+    #[test]
+    fn a_captured_clone_carries_the_gate_state_and_replays_identically() {
+        // (0,0) switch west of the spawn; the gate hangs off the route but the press makes
+        // the exit reachable. The host's snapshot capture/restore stores a clone of the
+        // whole episode, so the gate bits must ride along.
+        let scene = scene_from(&["(.@", "..E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        episode
+            .apply(mv(Direction::West))
+            .expect("west onto the switch");
+        episode
+            .apply(mv(Direction::West))
+            .expect("reaching the switch toggles");
+        assert_eq!(episode.state().gates, GateSet::from_bits(0b0001));
+
+        let mut restored = episode.clone();
+        assert_eq!(restored.state().gates, GateSet::from_bits(0b0001));
+        for action in [mv(EAST), mv(Direction::South), mv(EAST)] {
+            episode.apply(action).expect("legal");
+            restored.apply(action).expect("legal on the clone");
+        }
+        assert_eq!(episode.outcome(), Outcome::Won { tick: 5 });
+        assert_eq!(restored.current_hash(), episode.current_hash());
+        assert_eq!(restored.outcome(), Outcome::Won { tick: 5 });
+    }
+
+    #[test]
+    fn gate_episodes_round_trip_through_replays() {
+        use crate::replay::{self, Replay};
+
+        let scene = scene_from(&["(.@", "..E"], rules(10, WinCondition::ReachExit));
+        let mut episode = Episode::start(&scene).expect("playable");
+        for action in [
+            mv(Direction::West),
+            mv(Direction::West),
+            mv(EAST),
+            mv(Direction::South),
+            mv(EAST),
+        ] {
+            episode.apply(action).expect("legal");
+        }
+        assert_eq!(episode.outcome(), Outcome::Won { tick: 5 });
+        let replay = episode.to_replay(Some("gate toggle".to_owned()));
+        let json = serde_json::to_string(&replay).expect("serializable");
+        let parsed: Replay = serde_json::from_str(&json).expect("parsable");
+        let verification = replay::verify(&parsed).expect("compatible replay");
+        assert!(verification.verified, "{verification:?}");
+        assert_eq!(verification.steps_checked, 5);
+        assert_eq!(verification.reproduced_outcome, Outcome::Won { tick: 5 });
         assert_eq!(verification.reproduced_final_hash, episode.current_hash());
     }
 }

@@ -10,13 +10,15 @@
 //! | `^ > v <` | one-way tile allowing entry north, east, south or west |
 //! | `!` | hazard |
 //! | `0`-`9` | portal with pair id 0-9 |
+//! | `( [ { -` | switch of gate group 0, 1, 2 or 3 |
+//! | `) ] } =` | gate of gate group 0, 1, 2 or 3 |
 //! | `r g b y p o c w` | key (red, green, blue, yellow, purple, orange, cyan, white) |
 //! | `R G B Y P O C W` | door of the matching color |
 
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::entity::{EntityKind, KeyColor};
+use crate::entity::{EntityKind, KeyColor, MAX_GATE_GROUPS};
 use crate::geometry::{Direction, GridSize, Position};
 
 /// Empty floor.
@@ -66,6 +68,57 @@ pub fn portal_pair(glyph: char) -> Option<u8> {
     glyph
         .to_digit(10)
         .and_then(|digit| u8::try_from(digit).ok())
+}
+
+/// Glyph of the switch of gate group `group`. Groups outside `0..MAX_GATE_GROUPS` have no
+/// glyph.
+pub const fn switch_glyph(group: u8) -> char {
+    match group {
+        0 => '(',
+        1 => '[',
+        2 => '{',
+        3 => '-',
+        _ => '?',
+    }
+}
+
+/// Glyph of the gate of gate group `group`. Groups outside `0..MAX_GATE_GROUPS` have no
+/// glyph.
+pub const fn gate_glyph(group: u8) -> char {
+    match group {
+        0 => ')',
+        1 => ']',
+        2 => '}',
+        3 => '=',
+        _ => '?',
+    }
+}
+
+/// Gate group denoted by a switch glyph.
+pub const fn switch_group(glyph: char) -> Option<u8> {
+    match glyph {
+        '(' => Some(0),
+        '[' => Some(1),
+        '{' => Some(2),
+        '-' => Some(3),
+        _ => None,
+    }
+}
+
+/// Gate group denoted by a gate glyph.
+pub const fn gate_group(glyph: char) -> Option<u8> {
+    match glyph {
+        ')' => Some(0),
+        ']' => Some(1),
+        '}' => Some(2),
+        '=' => Some(3),
+        _ => None,
+    }
+}
+
+/// Whether `group` is a supported gate group id.
+pub const fn supported_gate_group(group: u8) -> bool {
+    group < MAX_GATE_GROUPS
 }
 
 /// A parsed layout: grid size plus the entities to create, in row-major order.
@@ -144,6 +197,8 @@ pub fn glyph_kind(glyph: char) -> Option<Option<EntityKind>> {
             direction: Direction::West,
         })),
         other if let Some(pair) = portal_pair(other) => Some(Some(EntityKind::Portal { pair })),
+        other if let Some(group) = switch_group(other) => Some(Some(EntityKind::Switch { group })),
+        other if let Some(group) = gate_group(other) => Some(Some(EntityKind::Gate { group })),
         other => KeyColor::from_key_glyph(other)
             .map(|color| Some(EntityKind::Key { color }))
             .or_else(|| {
@@ -232,6 +287,22 @@ pub fn legend() -> Vec<LegendEntry> {
         entries.push(entry(
             portal_glyph(pair),
             &format!("portal pair {pair} (teleports to the other {pair})"),
+        ));
+    }
+    for group in 0..MAX_GATE_GROUPS {
+        entries.push(entry(
+            switch_glyph(group),
+            &format!(
+                "switch of gate group {group} (entry toggles all gates of group {group} open/closed)"
+            ),
+        ));
+    }
+    for group in 0..MAX_GATE_GROUPS {
+        entries.push(entry(
+            gate_glyph(group),
+            &format!(
+                "gate of gate group {group} (impassable while closed; passable terrain while open; see the observation's `gates`)"
+            ),
         ));
     }
     for color in KeyColor::ALL {
@@ -342,5 +413,53 @@ mod tests {
         assert!(legend().iter().any(|e| e.glyph == "~"));
         assert!(legend().iter().any(|e| e.glyph == "!"));
         assert!(legend().iter().any(|e| e.glyph == "9"));
+    }
+
+    #[test]
+    fn switch_and_gate_glyphs_parse_render_round_trip_and_land_in_the_legend() {
+        let source = rows(&["([{-", ")]}="]);
+        let parsed = parse(&source).expect("valid gate layout");
+        for group in 0..4u8 {
+            let position = Position::new(group as i32, 0);
+            assert_eq!(
+                switch_group(switch_glyph(group)),
+                Some(group),
+                "switch glyph group {group}"
+            );
+            assert_eq!(gate_group(gate_glyph(group)), Some(group));
+            assert_eq!(
+                parsed
+                    .cells
+                    .iter()
+                    .find(|(p, _)| *p == position)
+                    .expect("cell")
+                    .1,
+                EntityKind::Switch { group },
+                "row 0 holds group {group}'s switch"
+            );
+            assert_eq!(
+                parsed
+                    .cells
+                    .iter()
+                    .find(|(p, _)| *p == Position::new(group as i32, 1))
+                    .expect("cell")
+                    .1,
+                EntityKind::Gate { group }
+            );
+        }
+        let rendered = render(
+            parsed.size,
+            parsed.cells.iter().map(|(p, kind)| (*p, kind.glyph())),
+        );
+        assert_eq!(rendered, source);
+        let legend_entries = legend();
+        let legend_glyphs: Vec<&str> = legend_entries.iter().map(|e| e.glyph.as_str()).collect();
+        for glyph in ['(', '[', '{', '-', ')', ']', '}', '='] {
+            let glyph = glyph.to_string();
+            assert!(
+                legend_glyphs.contains(&glyph.as_str()),
+                "legend is missing {glyph}"
+            );
+        }
     }
 }

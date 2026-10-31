@@ -5,24 +5,27 @@
 //!
 //! * **Geometric reachability** treats walls as the only obstacle (doors, terrain, keys and
 //!   tick limits are ignored). It is a walls-only diagnostic, not an oracle.
-//! * **Gameplay reachability** applies the real rules: terrain, doors, keys, the objective
-//!   and `max_ticks`. The search is exhaustive over (cell, keys held) states, so an
-//!   "unreachable" verdict is a proof for the current scene, not a heuristic.
+//! * **Gameplay reachability** applies the real rules: terrain, doors, keys, gate groups,
+//!   the objective and `max_ticks`. The search is exhaustive over
+//!   (cell, keys held, gate state) states, so an "unreachable" verdict is a proof for the
+//!   current scene, not a heuristic. Gate state adds one bit per gate group; the space is
+//!   capped at [`MAX_EXHAUSTIVE_STATES`], beyond which the analysis refuses with an error.
 //!
 //! When gameplay fails, the analysis lists what blocks the reachable region and verifies
 //! single-entity repairs by re-running the search with each candidate removed. Candidates
 //! are every entity whose removal could change the search: walls, doors, keys, exits,
-//! wrong-way one-way tiles and hazards adjacent to cells the player can move from or slide
-//! through, entered ice, required keys (for `collect_all_keys_then_exit`), and exits that
-//! end the episode before a cell target. Portals are excluded: a valid portal repair changes
-//! two entities, so it is already covered by the two-change lower bound. It never names a
-//! culprit it has not verified; when no single removal works it says so, which is then a
-//! proof that at least two changes are needed.
+//! wrong-way one-way tiles, hazards, gates and switches adjacent to cells the player can
+//! move from or slide through, entered ice, required keys (for
+//! `collect_all_keys_then_exit`), and exits that end the episode before a cell target.
+//! Portals are excluded: a valid portal repair changes two entities, so it is already
+//! covered by the two-change lower bound. It never names a culprit it has not verified;
+//! when no single removal works it says so, which is then a proof that at least two changes
+//! are needed.
 
 mod search;
 pub mod validation;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -40,14 +43,20 @@ pub use validation::{Issue, IssueCode, Severity, ValidationReport, validate};
 /// Most repair candidates verified per query.
 pub const MAX_REPAIR_CANDIDATES: usize = 64;
 
+/// Upper bound on states the exhaustive gameplay search may visit. The worst-case space of
+/// 4096 cells x 256 key sets x 16 gate masks is exactly `2^22`, so legal scenes never
+/// exceed it unless future mechanics grow the dimensions; over this bound
+/// [`reachability`] errors instead of searching — there is no heuristic fallback.
+pub const MAX_EXHAUSTIVE_STATES: usize = 1 << 22;
+
 /// Assumptions behind every [`ReachabilityReport`], published verbatim.
 pub const ASSUMPTIONS: [&str; 8] = [
     "Movement is 4-directional on the integer grid; one accepted move costs one tick, including any slide or portal hop.",
-    "Geometric reachability ignores terrain: walls block; doors, one-way tiles, ice, portals and hazards count as open; keys, win condition and max_ticks are ignored.",
-    "Gameplay reachability applies terrain: ice slides in the direction of travel until a wall, locked door, wrong-way one-way tile or the grid edge stops it, or until an object (key, door, exit, portal or hazard) is entered; a portal teleports once to its pair; entering a hazard fails the episode; a door is passable only while holding its color's key; keys are collected on entry and never consumed; stepping onto an exit while the win condition holds ends the episode.",
-    "The gameplay search is exhaustive over (cell, keys held) states, so 'unreachable' is a proof for the current scene, not a heuristic.",
-    "Starting on a key cell counts as holding that key.",
-    "Repair candidates are every wall, door, key, exit, wrong-way one-way tile and hazard adjacent to a cell the search can still move from or slide through, every entered ice tile, all keys when every key is required, and exits that end the episode before a cell target. Each listed repair was verified by re-running the gameplay search without that entity.",
+    "Geometric reachability ignores terrain and gate state: walls block; doors, one-way tiles, ice, portals, gates and hazards count as open; keys, switches, win condition and max_ticks are ignored.",
+    "Gameplay reachability applies terrain and gates: ice slides in the direction of travel until a wall, locked door, wrong-way one-way tile, closed gate or the grid edge stops it, or until an object (key, door, exit, portal, hazard or switch) is entered; a portal teleports once to its pair; entering a hazard fails the episode; a door is passable only while holding its color's key; a gate is passable only while its group is open; keys are collected on entry and never consumed; entering a switch toggles its gate group after the move; stepping onto an exit while the win condition holds ends the episode.",
+    "The gameplay search is exhaustive over (cell, keys held, gate state) states, bounded at 4194304 states, so 'unreachable' is a proof for the current scene, not a heuristic; over the bound the analysis refuses and reports a limit error.",
+    "Starting on a key cell counts as holding that key; starting on a switch toggles nothing, because toggles require an entry.",
+    "Repair candidates are every wall, door, key, exit, wrong-way one-way tile, hazard, gate and switch adjacent to a cell the search can still move from or slide through, every entered ice tile, all keys when every key is required, and exits that end the episode before a cell target. Each listed repair was verified by re-running the gameplay search without that entity.",
     "Portals are not repair candidates: a valid portal repair changes both members of a pair, which is a two-entity change already covered by the lower bound.",
     "Multi-entity repairs are not searched; when the candidate list was evaluated exhaustively and none works, at least two changes are needed.",
 ];
@@ -135,7 +144,7 @@ pub struct GameplayResult {
     pub reachable_cells: u32,
     /// Key colors that can be picked up from the start.
     pub obtainable_keys: Vec<KeyColor>,
-    /// (cell, keys) states expanded.
+    /// (cell, keys, gates) states expanded.
     pub explored_states: u32,
 }
 
@@ -157,6 +166,14 @@ pub enum BlockerReason {
     OneWay,
     /// A hazard; entering it ends the episode as a failure.
     Hazard,
+    /// A gate of a closed group that blocked at least one move attempted from a reachable
+    /// state. The fields name the group and whether the scene has any switch of it.
+    ClosedGate {
+        /// The gate's group.
+        group: u8,
+        /// Whether some switch in the scene toggles this group.
+        has_switch: bool,
+    },
 }
 
 /// An entity that stops the player from reaching the target.
@@ -250,6 +267,16 @@ pub enum AnalysisError {
         /// The wall there.
         wall: EntityId,
     },
+    /// The exhaustive gameplay search exceeds its state cap, so no verdict was attempted.
+    #[error(
+        "the exhaustive search would visit {states} (cell, keys, gates) states, over the cap of {cap}; analysis refused to guess"
+    )]
+    StateSpaceTooLarge {
+        /// Worst-case number of states.
+        states: u64,
+        /// The cap (`MAX_EXHAUSTIVE_STATES`).
+        cap: u64,
+    },
 }
 
 /// Answers whether `to` (default: the scene objective) can be reached from `from`
@@ -314,7 +341,15 @@ pub fn reachability(
         explored_cells: walls_only.explored_cells,
     };
 
-    let play = search::gameplay(&board, from, goal, collect_all, None);
+    let play = match search::gameplay(&board, from, goal, collect_all, None) {
+        Ok(play) => play,
+        Err(limit) => {
+            return Err(AnalysisError::StateSpaceTooLarge {
+                states: limit.states,
+                cap: limit.cap,
+            });
+        }
+    };
     let path_length = play.moves.as_ref().map(|m| len_u32(m.len()));
     let within_max_ticks = path_length.is_some_and(|length| length <= rules.max_ticks);
     let unreachable_reason = match path_length {
@@ -396,6 +431,15 @@ fn blockers_and_candidates(
     collect_all: bool,
 ) -> (Vec<Blocker>, Candidates) {
     let key_colors = scene.key_colors();
+    // Groups with at least one switch: the summary of a closed-gate blocker names whether
+    // the group can be toggled at all.
+    let switch_groups: BTreeSet<u8> = scene
+        .entities()
+        .filter_map(|entity| match entity.kind {
+            EntityKind::Switch { group } => Some(group),
+            _ => None,
+        })
+        .collect();
     let mut blockers = Vec::new();
     let mut candidates = search::adjacent_entities(board, &play.active_cells);
     for (id, (kind, position)) in &candidates {
@@ -412,6 +456,12 @@ fn blockers_and_candidates(
                 Some(BlockerReason::OneWay)
             }
             EntityKind::Hazard => Some(BlockerReason::Hazard),
+            EntityKind::Gate { group } if play.blocked_gates.contains(id) => {
+                Some(BlockerReason::ClosedGate {
+                    group: *group,
+                    has_switch: switch_groups.contains(group),
+                })
+            }
             _ => None,
         };
         if let Some(reason) = reason {
@@ -495,6 +545,8 @@ impl RepairSearch<'_> {
             .iter()
             .take(MAX_REPAIR_CANDIDATES)
             .filter_map(|(id, (kind, position))| {
+                // Removing an entity can only shrink the state space, so the cap error that
+                // `Err` represents cannot occur after the original search already ran.
                 let moves = search::gameplay(
                     self.board,
                     self.from,
@@ -502,6 +554,7 @@ impl RepairSearch<'_> {
                     self.collect_all,
                     Some(*id),
                 )
+                .ok()?
                 .moves?;
                 let length = len_u32(moves.len());
                 (!self.objective || length <= self.max_ticks).then_some(RepairCandidate {
@@ -605,6 +658,16 @@ fn summarize(
                         BlockerReason::Hazard => Some(format!(
                             "hazard {} at {} fails the episode on entry",
                             b.entity, b.position
+                        )),
+                        BlockerReason::ClosedGate { group, has_switch } => Some(format!(
+                            "gate {} at {} is closed (gate group {group}); {}",
+                            b.entity,
+                            b.position,
+                            if has_switch {
+                                "press that group's switch to open it"
+                            } else {
+                                "no switch of that group exists, so the gates of this group can never open"
+                            }
                         )),
                         BlockerReason::Wall => None,
                     })
@@ -1033,5 +1096,154 @@ mod tests {
             .collect();
         assert_eq!(ice.len(), 1);
         assert_eq!(ice[0].resulting_path_length, 1);
+    }
+
+    #[test]
+    fn a_gate_without_a_switch_blocks_with_evidence_and_its_removal_verifies() {
+        // The gate of group 0 can never open; walls plus the closed gate separate start
+        // and exit. The blocker is named only because a move actually failed against it.
+        let scene = scene(&["#@)E"], 20, WinCondition::ReachExit);
+        let report = reachability(&scene, None, None).expect("query runs");
+        assert_eq!(report.verdict, Verdict::Unsolvable);
+        assert!(
+            report.geometric.reachable,
+            "gates count as open geometrically"
+        );
+        let blocker = report
+            .blockers
+            .iter()
+            .find(|b| matches!(b.kind, EntityKind::Gate { group: 0 }))
+            .expect("the closed gate is a blocker");
+        assert!(
+            matches!(
+                blocker.reason,
+                BlockerReason::ClosedGate {
+                    group: 0,
+                    has_switch: false
+                }
+            ),
+            "{blocker:?}"
+        );
+        let repairs = report.repairs.expect("repairs computed");
+        let removals: Vec<EntityKind> = repairs.single_removals.iter().map(|c| c.kind).collect();
+        assert_eq!(removals, vec![EntityKind::Gate { group: 0 }]);
+    }
+
+    #[test]
+    fn a_toggled_gate_connects_a_walled_region() {
+        // The gate of group 0 opens by pressing the switch; the search follows the toggles.
+        let scene = scene(&["#@()E"], 20, WinCondition::ReachExit);
+        let report = reachability(&scene, None, None).expect("query runs");
+        assert_eq!(report.verdict, Verdict::Solvable);
+        assert_eq!(
+            report.gameplay.path_length,
+            Some(3),
+            "press, walk through the gate, step onto the exit"
+        );
+        assert_eq!(
+            report.gameplay.moves,
+            vec![Direction::East, Direction::East, Direction::East]
+        );
+        assert!(report.blockers.is_empty());
+        assert!(report.repairs.is_none(), "solvable: no repair search ran");
+        // Removing the gate alone keeps it solvable; removing the switch alone does not
+        // (the closed gate can then never open).
+        let id_of = |scene: &Scene, kind: EntityKind| {
+            scene
+                .entities()
+                .find(|e| e.kind == kind)
+                .map(|e| e.id)
+                .expect("entity present")
+        };
+        let gate_removed = scene
+            .apply_edits(&[SceneEdit::RemoveEntity {
+                id: id_of(&scene, EntityKind::Gate { group: 0 }),
+            }])
+            .expect("valid")
+            .0;
+        assert_eq!(
+            reachability(&gate_removed, None, None)
+                .expect("query runs")
+                .verdict,
+            Verdict::Solvable
+        );
+        let switch_removed = scene
+            .apply_edits(&[SceneEdit::RemoveEntity {
+                id: id_of(&scene, EntityKind::Switch { group: 0 }),
+            }])
+            .expect("valid")
+            .0;
+        assert_eq!(
+            reachability(&switch_removed, None, None)
+                .expect("query runs")
+                .verdict,
+            Verdict::Unsolvable
+        );
+    }
+
+    #[test]
+    fn validation_names_unpaired_groups_and_the_state_cap() {
+        // Gate with no switch: its gates can never open.
+        let without_switch = scene(&["#@)E"], 20, WinCondition::ReachExit);
+        let report = validate(&without_switch);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == IssueCode::GateWithoutSwitch),
+            "{report:?}"
+        );
+        // Switch with no gate: pressing it is a no-op; standing beside one is fine, since
+        // toggles require an entry.
+        let without_gate = scene(&["#@.(E"], 20, WinCondition::ReachExit);
+        let report = validate(&without_gate);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == IssueCode::SwitchWithoutGate),
+            "{report:?}"
+        );
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|issue| issue.code == IssueCode::PlayerOnSwitch),
+            "the player stands next to the switch, not on it"
+        );
+    }
+
+    #[test]
+    fn an_over_cap_state_space_refuses_instead_of_guessing() {
+        // 64x64 with 8 key colors and all 4 gate groups: 4096 x 2^8 x 2^4 = 2^24 states,
+        // over the 2^22 cap. The analysis refuses rather than guessing.
+        let mut first = String::with_capacity(64);
+        first.push('@');
+        first.push_str("rgbypocw");
+        first.push_str("([{=");
+        first.push_str(")]}=");
+        for _ in 17..63 {
+            first.push('.');
+        }
+        first.push('E');
+        let rows: Vec<String> = std::iter::once(first)
+            .chain(std::iter::repeat_n(".".repeat(64), 63))
+            .collect();
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let scene = scene(&refs, 100, WinCondition::ReachExit);
+        let error = reachability(&scene, None, None).expect_err("over the cap");
+        let AnalysisError::StateSpaceTooLarge { states, cap } = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(states, 1 << 24);
+        assert_eq!(cap, MAX_EXHAUSTIVE_STATES as u64);
+        let report = validate(&scene);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == IssueCode::AnalysisLimit),
+            "{report:?}"
+        );
     }
 }

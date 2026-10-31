@@ -225,6 +225,8 @@ Every request is one JSON line. Full argument and result schemas: `protocol.sche
 | `move_blocked` | A wall occupies the move target. |
 | `one_way_blocked` | The move target is a one-way tile that allows entry only from another direction. |
 | `door_locked` | The move target is a door whose key the player does not hold. |
+| `gate_closed` | The move target is a gate whose group is closed. |
+| `invalid_gate_group` | A gate group id must be between 0 and 3. |
 | `snapshot_not_found` | No snapshot has this id in this session. |
 | `limit_exceeded` | A documented limit (batch size, snapshot count, ...) would be exceeded. |
 | `storage_error` | A file could not be read or written. |

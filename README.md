@@ -7,12 +7,13 @@ editor, GUI, GPU, account, credentials or model API is involved, and no language
 inside the simulation loop: the engine executes the rules itself.
 
 > **Status: two vertical slices.** A turn-based 2D integer-grid dungeon (players, walls,
-> colored keys, matching doors, exits, ice, one-way tiles, portals, hazards) and a headless
-> fixed-timestep 2D rigid-body mode (balls, boxes, materials, impulses, sensor goals). Both
-> are driven through the same versioned protocol, by JSON Lines clients and by MCP tools.
-> They are foundations, not a general-purpose engine: there is no rendering pipeline,
-> scripting language or live viewer yet (see [Roadmap](#roadmap)). See
-> [docs/TERRAIN.md](docs/TERRAIN.md) for the terrain model and its reachability proof.
+> colored keys, matching doors, exits, ice, one-way tiles, portals, hazards, toggled gate
+> groups) and a headless fixed-timestep 2D rigid-body mode (balls, boxes, materials,
+> impulses, sensor goals). Both are driven through the same versioned protocol, by JSON
+> Lines clients and by MCP tools. They are foundations, not a general-purpose engine: there
+> is no rendering pipeline, scripting language or live viewer yet (see
+> [Roadmap](#roadmap)). See [docs/TERRAIN.md](docs/TERRAIN.md) for the terrain model and its
+> reachability proof, and [docs/SWITCHES.md](docs/SWITCHES.md) for switches and gates.
 > "AgentForge" is a temporary internal working name, not a claim of trademark availability.
 
 ## What works
@@ -22,17 +23,20 @@ inside the simulation loop: the engine executes the rules itself.
   `win_condition`) are data; atomic edit batches; optimistic concurrency via
   `expected_revision`.
 - **Play through the protocol**: episodes on a frozen copy of a scene, full observations
-  (structured + ASCII + legal actions), one accepted action = exactly one logical tick,
-  rejected actions change nothing and explain why (`door_locked` names the key and where it
-  is, `one_way_blocked` names the allowed direction), exactly-once retries via
+  (structured + ASCII + legal actions + gate-group states), one accepted action = exactly
+  one logical tick, rejected actions change nothing and explain why (`door_locked` names the
+  key and where it is, `one_way_blocked` names the allowed direction, `gate_closed` names
+  the group and whether a switch of it exists), exactly-once retries via
   `expected_episode_id` + `expected_tick`, events, assertions.
 - **Terrain and movement**: ice slides (one tick per whole slide), one-way entry, paired
-  portals (one hop, never a chain), and fatal hazards. Terrain is static, so episode state
-  and the exhaustive reachability proof keep the same state space.
+  portals (one hop, never a chain), fatal hazards, and switches with persistent gate groups
+  (up to 4; gates start closed, an entry toggles, and one move can never open and pass a
+  gate).
 - **Diagnostics that say what is actually wrong**: geometric (walls-only) vs gameplay
-  (terrain, keys, doors, exits that end the episode, win condition, `max_ticks`)
-  reachability, computed by exhaustive search over `(cell, keys held)`, so "unsolvable" is
-  a proof; named blockers (walls, wrong-way one-ways, hazards, doors whose key is missing or
+  (terrain, gates, keys, doors, exits that end the episode, win condition, `max_ticks`)
+  reachability, computed by exhaustive search over `(cell, keys held, gate state)`, so
+  "unsolvable" is a proof (or a refusal above 4,194,304 states — never a guess); named
+  blockers (walls, wrong-way one-ways, hazards, closed gates, doors whose key is missing or
   unreachable, unreachable required keys); single-removal repairs the engine has *verified*
   by re-solving, drawn from every entity whose removal could matter, so "no single removal
   works" is also a proof.

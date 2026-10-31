@@ -416,10 +416,12 @@ mod tests {
     #[test]
     fn incompatible_versions_are_rejected_explicitly() {
         let mut replay = recorded();
-        replay.state_hash_version = 2;
+        replay.state_hash_version = STATE_HASH_VERSION + 1;
         assert_eq!(
             verify(&replay),
-            Err(ReplayError::UnsupportedHashVersion { found: 2 })
+            Err(ReplayError::UnsupportedHashVersion {
+                found: STATE_HASH_VERSION + 1
+            })
         );
         let mut replay = recorded();
         replay.format = "something.else".to_owned();

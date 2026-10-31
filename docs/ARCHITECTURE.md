@@ -118,20 +118,23 @@ simulation state and no authorization: the role still comes from the launcher.
 `agentforge_core::episode` and published by `discover` (`game.tick_resolution_order`):
 
 1. reject if ended, or if the first cell of a move is outside the grid, a wall, a locked
-   door, or a one-way tile facing against the move (nothing changes);
+   door, a one-way tile facing against the move, or a closed gate (nothing changes);
 2. tick += 1;
 3. apply: move resolves the whole displacement (floor and ice crossings, at most one portal
    hop, collecting an uncollected key on the final cell), wait, or forfeit (fails
    immediately);
-4. fail immediately if the final cell is a hazard;
-5. win if on an exit and the win condition holds;
-6. otherwise fail if `tick == max_ticks`.
+4. if the move ended on a switch, its gate group toggles and a `switch_pressed` event is
+   emitted; the displacement already resolved against the pre-toggle state, so one move can
+   never open and pass a gate;
+5. fail immediately if the final cell is a hazard;
+6. win if on an exit and the win condition holds;
+7. otherwise fail if `tick == max_ticks`.
 
 There are no autonomous entities, timers or randomness, so no simulation work is pending
 between ticks. Snapshots therefore capture entities, rules, the ID allocator, tick, player,
-inventory, outcome, events and the step log, which is the complete state needed to continue.
-They also record the project's save path as metadata, so a restored project saves back to
-its own file and never over another project's.
+inventory, gate groups, outcome, events and the step log, which is the complete state needed
+to continue. They also record the project's save path as metadata, so a restored project
+saves back to its own file and never over another project's.
 
 ## Determinism
 
@@ -154,9 +157,11 @@ rejected explicitly instead of being reported as divergences.
 
 ## Canonical hashing
 
-`hash.rs` is the reference. Hashes are SHA-256 over this encoding (version 1), written as
+`hash.rs` is the reference. Hashes are SHA-256 over this encoding, written as
 `sha256:<64 lowercase hex>`. Integers are fixed-width little-endian; `str(s)` is the UTF-8
-byte length as `u32` followed by the bytes.
+byte length as `u32` followed by the bytes. The scene digest (version 1) predates gate
+groups and is unchanged by them; the state hash is version 2 (`agentforge.state.v2`), bumped
+from v1 when the gate bitmask was added.
 
 **Scene digest**
 
@@ -168,9 +173,11 @@ u32 next_entity_id
 u32 entity_count
 per entity, ascending id:
   u32 id, u8 kind                      (1 player, 2 wall, 3 key, 4 door, 5 exit,
-                                        6 ice, 7 one_way, 8 hazard, 9 portal)
+                                        6 ice, 7 one_way, 8 hazard, 9 portal,
+                                        10 switch, 11 gate)
   u8 attribute                         (0 none; key/door 1 + color index;
-                                        one_way 1 + direction index; portal 1 + pair id)
+                                        one_way 1 + direction index; portal 1 + pair id;
+                                        switch/gate 1 + gate group)
   i32 x, i32 y
 ```
 
@@ -179,11 +186,12 @@ Labels are excluded (presentation metadata).
 **State hash** (recorded after every tick)
 
 ```
-str("agentforge.state.v1")
+str("agentforge.state.v2")
 32 raw bytes of the scene digest
 u32 tick
 i32 player_x, i32 player_y
 u8 inventory bitmask                   (bit i = color index i)
+u8 gate bitmask                        (bit i = gate group i open)
 u8 outcome                             (0 in progress, 1 won, 2 failed: max_ticks,
                                        3 failed: forfeited, 4 failed: hazard)
 u32 outcome_tick                       (0 while in progress)
@@ -220,21 +228,25 @@ the replay starts from that project's scene.
 
 `analysis::reachability` answers two questions separately:
 
-- **geometric**: walls block; doors and terrain are open; keys, win condition and
+- **geometric**: walls block; doors, gates and terrain are open; keys, win condition and
   `max_ticks` are ignored. It is a walls-only diagnostic, not an oracle: a portal can make
   gameplay reachable while this is not, and a wrong-way one-way can do the reverse.
-- **gameplay**: breadth-first search over (cell, keys held) with the real rules, including
-  slides, one-way entry, portal hops and fatal hazards. Terrain is static, so it adds no
-  state dimension: with at most 64×64 cells and 8 key colors, the search visits at most
-  about a million states and is run to exhaustion, so "unreachable" is a proof.
-  Non-consumable colored keys are what keep it exhaustive and bounded; consumable keys would
-  make the state space grow exponentially with the number of doors.
+- **gameplay**: breadth-first search over (cell, keys held, gate state) with the real rules,
+  including slides, one-way entry, portal hops, fatal hazards and gate toggles. Terrain is
+  static, so it adds no state dimension; gate groups add one bit each, but there are at most
+  4 groups. With at most 64×64 cells, 8 key colors and 4 gate groups the space is at most
+  about 4.2 million states, capped at `MAX_EXHAUSTIVE_STATES`: the search runs to completion
+  within the cap, so "unreachable" is a proof, and refuses with `limit_exceeded` above it
+  rather than guessing. Non-consumable colored keys and single-bit gate groups are what keep
+  it exhaustive and bounded; consumable keys would make the state space grow exponentially
+  with the number of doors.
 
-A move resolves through `movement::plan`, the same function episodes use, so play and
-analysis cannot disagree. Entering ice starts a slide that continues until a wall, locked
-door, wrong-way one-way, edge or object stops it; objects stop slides, terrain does not.
-Portals are one hop and end a displacement; hazards are entered and fail the episode. The
-search never expands a hazard or a winning exit state.
+A move resolves through `movement::plan`, the same function episodes use (including the
+spot where a switch toggles only after the plan), so play and analysis cannot disagree.
+Entering ice starts a slide that continues until a wall, locked door, wrong-way one-way,
+closed gate, edge or object stops it; objects (including switches) stop slides, terrain and
+open gates do not. Portals are one hop and end a displacement; hazards are entered and fail
+the episode. The search never expands a hazard or a winning exit state.
 
 Stepping onto an exit while the win condition holds ends the episode, so the search never
 continues past such a state. A route to a cell beyond an exit is therefore correctly
@@ -246,8 +258,8 @@ missing or unreachable; required keys that cannot be reached (`collect_all_keys_
 and exits that end the episode before a cell target. **Repair candidates** are every entity
 whose single removal could change the search result:
 
-- walls, doors, keys, exits, wrong-way one-way tiles and hazards adjacent to active cells
-  (the search never tries to enter any other ones);
+- walls, doors, keys, exits, wrong-way one-way tiles, hazards, gates and switches adjacent
+  to active cells (the search never tries to enter any other ones);
 - ice tiles that an active move enters (removing one changes where a slide stops);
 - every key, when the win condition requires all keys (removing a key can only drop a
   requirement or close doors);
@@ -324,7 +336,7 @@ These are extension points only; none is implemented.
   `server/discover`) alongside the legacy `initialize` handshake.
 - **Remote transports.** A network transport with real authentication. Today the boundary is
   local process separation.
-- **Richer rules.** A bounded declarative rule format for new mechanics (enemies, switches,
+- **Richer rules.** A bounded declarative rule format for new mechanics (enemies,
   timers), informed by VGDL, PuzzleScript and Griddly GDY rather than arbitrary code.
 - **Session-level replays** that include authoring edits; persisted snapshots.
 - **Hidden information**: per-role observation filters, with tests that prove nothing leaks.
