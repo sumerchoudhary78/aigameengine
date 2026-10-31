@@ -107,6 +107,12 @@ pub enum SceneError {
         /// The rejected pair id.
         pair: u8,
     },
+    /// A gate group id outside `0..=3`.
+    #[error("gate group {group} is not supported; gate groups are 0 through 3")]
+    InvalidGateGroup {
+        /// The rejected group id.
+        group: u8,
+    },
     /// Label too long or containing control characters.
     #[error("invalid label: {reason}")]
     InvalidLabel {
@@ -487,6 +493,12 @@ impl Scene {
                     return Err(SceneError::InvalidPortalPair { pair });
                 }
             }
+            kind @ (EntityKind::Switch { .. } | EntityKind::Gate { .. }) => {
+                let group = kind.group().unwrap_or(u8::MAX);
+                if !crate::layout::supported_gate_group(group) {
+                    return Err(SceneError::InvalidGateGroup { group });
+                }
+            }
             EntityKind::Wall
             | EntityKind::Door { .. }
             | EntityKind::Exit
@@ -649,6 +661,35 @@ mod tests {
             .expect("pair 9 is in range");
         let portal = scene.entity(EntityId::new(1)).expect("created");
         assert_eq!(portal.kind, EntityKind::Portal { pair: 9 });
+    }
+
+    #[test]
+    fn gate_groups_outside_the_glyph_range_are_rejected() {
+        for kind in [
+            EntityKind::Switch { group: 4 },
+            EntityKind::Gate { group: 4 },
+            EntityKind::Switch { group: u8::MAX },
+            EntityKind::Gate { group: u8::MAX },
+        ] {
+            let error = scene()
+                .apply_edits(&[create(kind, 0, 0)])
+                .expect_err("groups have glyphs only for 0..=3");
+            assert!(matches!(
+                error.error,
+                SceneError::InvalidGateGroup { group: 4 | u8::MAX }
+            ));
+        }
+
+        for kind in [
+            EntityKind::Switch { group: 3 },
+            EntityKind::Gate { group: 3 },
+        ] {
+            let (created, _) = scene()
+                .apply_edits(&[create(kind, 0, 0)])
+                .expect("group 3 is in range");
+            let entity = created.entity(EntityId::new(1)).expect("created");
+            assert_eq!(entity.kind, kind);
+        }
     }
 
     #[test]

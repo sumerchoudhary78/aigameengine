@@ -603,6 +603,78 @@ fn second_scene_with_keys_and_doors_works_through_the_same_commands() {
 }
 
 #[test]
+fn switches_and_gates_work_through_the_protocol_end_to_end() {
+    let mut session = Session::author();
+    session.ok(
+        "project.create",
+        json!({"name": "gates", "expected_revision": 0}),
+    );
+    // The gate of group 0 is adjacent to the spawn, with no switch in the scene.
+    session.ok(
+        "scene.create",
+        json!({"name": "blocked", "expected_revision": 1, "layout": ["@)E"]}),
+    );
+    // The switch of group 0 precedes the gate, so pressing it opens the way.
+    session.ok(
+        "scene.create",
+        json!({"name": "toggled", "expected_revision": 2, "layout": ["@.()E"]}),
+    );
+
+    // The analysis is toggle-aware: floor, switch press, gate, exit.
+    let moves = solution(&mut session, "toggled");
+    assert_eq!(moves.len(), 4);
+
+    session.ok("episode.start", json!({"scene": "blocked"}));
+    let closed = session.err(
+        "episode.act",
+        json!({"action": {"type": "move", "direction": "east"}}),
+    );
+    assert_eq!(closed["code"], "gate_closed", "{closed:#}");
+    assert_eq!(closed["details"]["group"], 0);
+    assert_eq!(closed["details"]["gate"], 2);
+    assert_eq!(closed["details"]["target"], json!({"x": 1, "y": 0}));
+    assert!(closed["details"]["legal_actions"].is_array(), "{closed:#}");
+    assert!(
+        closed["hint"]
+            .as_str()
+            .is_some_and(|h| h.contains("No switch of group 0")),
+        "{closed:#}"
+    );
+
+    session.ok("episode.start", json!({"scene": "toggled"}));
+    session.moves(&[json!("east"), json!("east")]);
+    let press = session.ok("episode.events", json!({"limit": 10}));
+    let pressed: Vec<&Value> = press["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["type"] == "switch_pressed")
+        .collect();
+    assert_eq!(pressed.len(), 1, "{press:#}");
+    assert_eq!(pressed[0]["open"], true);
+    assert_eq!(pressed[0]["group"], 0);
+
+    let passed = session.moves(&[json!("east"), json!("east")]);
+    assert_eq!(passed.len(), 2, "the open gate is passable terrain");
+    assert_eq!(session.episode_brief()["outcome"]["status"], "won");
+
+    // The observation exposes the gate state alongside the inventory.
+    session.ok("episode.reset", json!({}));
+    session.ok("episode.start", json!({"scene": "toggled"}));
+    let observed = session.ok(
+        "episode.act",
+        json!({
+            "action": {"type": "move", "direction": "east"},
+            "include_observation": true
+        }),
+    );
+    assert_eq!(
+        observed["observation"]["gates"],
+        json!([{"group": 0, "open": false}])
+    );
+}
+
+#[test]
 fn scene_edits_never_affect_a_running_episode() {
     let mut session = Session::author();
     session.ok(
@@ -724,7 +796,8 @@ fn discover_publishes_every_operation_with_examples_and_schemas() {
     assert_eq!(
         kinds,
         vec![
-            "player", "wall", "key", "door", "exit", "ice", "one_way", "hazard", "portal"
+            "player", "wall", "key", "door", "exit", "ice", "one_way", "hazard", "portal",
+            "switch", "gate"
         ]
     );
     let failures: Vec<&str> = discovered["game"]["failure_conditions"]
@@ -743,7 +816,11 @@ fn discover_publishes_every_operation_with_examples_and_schemas() {
     for glyph in ["~", "!", "^", ">", "v", "<", "0", "9"] {
         assert!(glyphs.contains(&glyph), "legend is missing {glyph}");
     }
+    for glyph in ["(", "[", "{", "-", ")", "]", "}", "="] {
+        assert!(glyphs.contains(&glyph), "legend is missing {glyph}");
+    }
     assert_eq!(discovered["constraints"]["max_portal_pairs"], json!(10));
+    assert_eq!(discovered["constraints"]["max_gate_groups"], json!(4));
 
     let one = author.ok("discover", json!({"operation": "scene.apply_batch"}));
     let schema = &one["operations"][0]["arguments_schema"];

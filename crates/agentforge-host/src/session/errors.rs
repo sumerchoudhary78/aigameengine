@@ -118,6 +118,11 @@ pub(crate) fn scene_error(error: SceneError) -> ApiError {
                 .with("pair", pair)
                 .hint("Pair ids are 0-9, so a scene has at most ten portal pairs.")
         }
+        SceneError::InvalidGateGroup { group } => {
+            ApiError::new(ErrorCode::InvalidGateGroup, message)
+                .with("group", group)
+                .hint("Gate groups are 0-3, so a scene has at most four groups.")
+        }
         SceneError::InvalidRules { field, .. } => {
             ApiError::new(ErrorCode::InvalidRules, message).with("field", field)
         }
@@ -262,6 +267,35 @@ pub(crate) fn action_error(error: ActionError, episode: &Episode) -> ApiError {
                 .with("allowed_direction", allowed),
         )
         .hint("This tile can only be entered while moving in allowed_direction."),
+        ActionError::GateClosed {
+            from,
+            direction,
+            target,
+            gate,
+            group,
+        } => {
+            let switch = episode.scene().entities().find(
+                |e| matches!(e.kind, EntityKind::Switch { group: group2 } if group2 == group),
+            );
+            let hint = match switch {
+                Some(switch) => format!(
+                    "Press the switch of group {group} first: entity {} at {}.",
+                    switch.id, switch.position
+                ),
+                None => format!(
+                    "No switch of group {group} exists in this scene, so this gate never opens."
+                ),
+            };
+            with_legal(
+                ApiError::new(ErrorCode::GateClosed, message)
+                    .with("from", from)
+                    .with("direction", direction)
+                    .with("target", target)
+                    .with("gate", gate)
+                    .with("group", group),
+            )
+            .hint(hint)
+        }
     }
 }
 
@@ -281,6 +315,15 @@ pub(crate) fn analysis_error(error: AnalysisError) -> ApiError {
             .with("field", "from")
             .with("position", position)
             .with("wall", wall),
+        AnalysisError::StateSpaceTooLarge { states, cap } => ApiError::new(
+            ErrorCode::LimitExceeded,
+            message,
+        )
+        .with("states", states)
+        .with("cap", cap)
+        .hint(
+            "The exhaustive search refuses to guess. Reduce the number of distinct key colors or gate groups the player can reach, then retry.",
+        ),
     }
 }
 

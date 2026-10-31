@@ -190,8 +190,48 @@ impl FromIterator<KeyColor> for KeySet {
     }
 }
 
+/// The set of gate groups whose gates are currently **open**, stored as a bitmask indexed
+/// by group id. A new episode starts with no open groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct GateSet(u8);
+
+impl GateSet {
+    /// No open groups: every gate closed.
+    pub const EMPTY: GateSet = GateSet(0);
+
+    /// Creates a set from its raw bitmask.
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    /// The raw bitmask (bit `i` set means group `i` is open).
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Whether `group` is open.
+    pub const fn contains(self, group: u8) -> bool {
+        self.0 & (1 << group) != 0
+    }
+
+    /// Flips `group`: open becomes closed and closed becomes open.
+    pub const fn toggled(self, group: u8) -> GateSet {
+        GateSet(self.0 ^ (1 << group))
+    }
+
+    /// Groups of `self` in ascending id order.
+    pub fn groups(self) -> Vec<u8> {
+        (0..MAX_GATE_GROUPS)
+            .filter(|group| self.contains(*group))
+            .collect()
+    }
+}
+
 /// Number of distinct portal pair ids: valid ids are `0..MAX_PORTAL_PAIRS`.
 pub const MAX_PORTAL_PAIRS: u8 = 10;
+
+/// Number of distinct gate groups: valid ids are `0..MAX_GATE_GROUPS`.
+pub const MAX_GATE_GROUPS: u8 = 4;
 
 /// What an entity is. Serialized with a `type` tag, e.g. `{"type": "door", "color": "red"}`.
 #[derive(
@@ -232,6 +272,19 @@ pub enum EntityKind {
         #[schemars(range(min = 0, max = 9))]
         pair: u8,
     },
+    /// Pressure plate. Entering it toggles its group between "all gates closed" and "all
+    /// gates open"; the state persists until the next toggle.
+    Switch {
+        /// The gate group this switch toggles.
+        #[schemars(range(min = 0, max = 3))]
+        group: u8,
+    },
+    /// Barrier that is passable while its group is open and impassable while it is closed.
+    Gate {
+        /// The gate group this gate belongs to.
+        #[schemars(range(min = 0, max = 3))]
+        group: u8,
+    },
 }
 
 impl EntityKind {
@@ -247,6 +300,8 @@ impl EntityKind {
             EntityKind::OneWay { .. } => "one_way",
             EntityKind::Hazard => "hazard",
             EntityKind::Portal { .. } => "portal",
+            EntityKind::Switch { .. } => "switch",
+            EntityKind::Gate { .. } => "gate",
         }
     }
 
@@ -254,6 +309,14 @@ impl EntityKind {
     pub const fn color(self) -> Option<KeyColor> {
         match self {
             EntityKind::Key { color } | EntityKind::Door { color } => Some(color),
+            _ => None,
+        }
+    }
+
+    /// The gate group carried by switches and gates.
+    pub const fn group(self) -> Option<u8> {
+        match self {
+            EntityKind::Switch { group } | EntityKind::Gate { group } => Some(group),
             _ => None,
         }
     }
@@ -270,15 +333,25 @@ impl EntityKind {
             EntityKind::OneWay { direction } => crate::layout::one_way_glyph(direction),
             EntityKind::Hazard => crate::layout::HAZARD,
             EntityKind::Portal { pair } => crate::layout::portal_glyph(pair),
+            EntityKind::Switch { group } => crate::layout::switch_glyph(group),
+            EntityKind::Gate { group } => crate::layout::gate_glyph(group),
         }
     }
 }
 
 impl fmt::Display for EntityKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.color() {
-            Some(color) => write!(f, "{color} {}", self.name()),
-            None => f.write_str(self.name()),
+        match self.group() {
+            Some(group) if matches!(self, EntityKind::Switch { .. }) => {
+                write!(f, "switch group {group}")
+            }
+            Some(group) if matches!(self, EntityKind::Gate { .. }) => {
+                write!(f, "gate group {group}")
+            }
+            _ => match self.color() {
+                Some(color) => write!(f, "{color} {}", self.name()),
+                None => f.write_str(self.name()),
+            },
         }
     }
 }

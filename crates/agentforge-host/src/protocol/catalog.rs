@@ -505,9 +505,17 @@ pub fn game_model() -> GameModel {
             EntityKind::Portal { pair: 0 },
             "Entering it stops the displacement and teleports the player once to the other portal with the same pair id; the slide does not resume. A pair must contain exactly two portals.",
         ),
+        (
+            EntityKind::Switch { group: 0 },
+            "Entering it toggles all gates of its group between closed and open; the state persists until the next press. Only entering counts, and the plan of the same move still saw the old state, so one move cannot open and pass a gate.",
+        ),
+        (
+            EntityKind::Gate { group: 0 },
+            "Shares its group's state: impassable like a wall while the group is closed, passable terrain while open (slides cross it without stopping). The observation's `gates` lists the current groups.",
+        ),
     ];
     GameModel {
-        summary: "Turn-based 2D integer grid. One player moves through walls, colored keys, matching doors, exits, ice, one-way tiles, portals and hazards. Scenes and rule parameters are data; nothing requires recompiling.".to_owned(),
+        summary: "Turn-based 2D integer grid. One player moves through walls, colored keys, matching doors, exits, ice, one-way tiles, portals, hazards and toggled gate groups. Scenes and rule parameters are data; nothing requires recompiling.".to_owned(),
         observability: "Fully observable: player observations contain the complete board. There is no hidden information in this version, so no hidden-information protection is claimed. Observations exclude authoring labels, revisions and engine internals.".to_owned(),
         timing: "Logical ticks only. Each accepted episode.act advances exactly one tick; rejected actions advance nothing. A slide or portal hop is part of the move that started it, so it costs no extra tick. Nothing else moves, so there is no pending simulation work between ticks. No wall clock, randomness or thread scheduling affects outcomes.".to_owned(),
         coordinates: "Integer cells. x grows east, y grows south; (0, 0) is the north-west corner. Grids are 1-64 cells per side.".to_owned(),
@@ -536,12 +544,13 @@ pub fn game_model() -> GameModel {
             },
         ],
         tick_resolution_order: vec![
-            "1. Reject the action if the episode ended, or if the first cell of a move leaves the grid, is a wall, a locked door, or a one-way tile facing against the move. Rejection changes nothing.".to_owned(),
+            "1. Reject the action if the episode ended, or if the first cell of a move leaves the grid, is a wall, a locked door, a one-way tile facing against the move, or a closed gate. Rejection changes nothing.".to_owned(),
             "2. Advance the tick by one.".to_owned(),
-            "3. Apply the action: move resolves the whole displacement (crossing floor and ice, at most one portal hop) and collects an uncollected key on the final cell; wait does nothing; forfeit fails the episode immediately.".to_owned(),
-            "4. If the final cell is a hazard, the episode fails immediately.".to_owned(),
-            "5. If the player stands on an exit and the win condition holds, the episode is won.".to_owned(),
-            "6. Otherwise, if the tick reached max_ticks, the episode fails.".to_owned(),
+            "3. Apply the action: move resolves the whole displacement (crossing floor, ice and open gates, at most one portal hop) and collects an uncollected key on the final cell; wait does nothing; forfeit fails the episode immediately.".to_owned(),
+            "4. If the move ended on a switch, its gate group toggles open/closed and a switch_pressed event is emitted. The displacement already resolved against the pre-toggle state, so one move cannot open and pass a gate.".to_owned(),
+            "5. If the final cell is a hazard, the episode fails immediately.".to_owned(),
+            "6. If the player stands on an exit and the win condition holds, the episode is won.".to_owned(),
+            "7. Otherwise, if the tick reached max_ticks, the episode fails.".to_owned(),
         ],
         ascii_legend: layout::legend(),
     }
@@ -570,6 +579,7 @@ pub fn constraints() -> Constraints {
         max_keys_per_color: 1,
         key_color_count: 8,
         max_portal_pairs: u32::from(agentforge_core::entity::MAX_PORTAL_PAIRS),
+        max_gate_groups: u32::from(agentforge_core::entity::MAX_GATE_GROUPS),
         max_request_bytes: MAX_REQUEST_BYTES as u64,
         max_request_id_chars: MAX_REQUEST_ID_CHARS as u32,
         max_batch_edits: MAX_BATCH_EDITS as u32,

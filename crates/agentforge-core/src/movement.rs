@@ -1,15 +1,18 @@
-//! Terrain-aware movement resolution.
+//! Terrain- and gate-aware movement resolution.
 //!
 //! One `move` action resolves to a [`MovePlan`]: a straight displacement that may cross
-//! floor and ice, stop on an object, follow at most one portal hop, and end in a hazard.
-//! Episodes and the analysis BFS both call [`plan`], so play and proof cannot drift.
+//! floor, ice and open gates, stop on an object, follow at most one portal hop, and end in
+//! a hazard. Episodes and the analysis BFS both call [`plan`], so play and proof cannot
+//! drift.
 //!
 //! The plan is total and terminating: after the first step every iteration advances one cell
 //! in the same direction, and the grid is finite. A portal hop ends the displacement, so
-//! paired portals cannot ping-pong.
+//! paired portals cannot ping-pong. Gate passability is evaluated against the `gates` set as
+//! of the start of the action; a switch press (which the caller applies after the plan)
+//! affects only later actions.
 
 use crate::board::{Board, Occupant};
-use crate::entity::{EntityKind, KeyColor, KeySet};
+use crate::entity::{EntityKind, GateSet, KeyColor, KeySet};
 use crate::geometry::{Direction, Position};
 use crate::ids::EntityId;
 
@@ -45,6 +48,15 @@ pub(crate) enum MoveBlock {
         tile: EntityId,
         /// The only allowed entry direction.
         allowed: Direction,
+    },
+    /// The first target is a gate of a group that is closed.
+    ClosedGate {
+        /// The gate cell.
+        target: Position,
+        /// The gate entity.
+        gate: EntityId,
+        /// Its group.
+        group: u8,
     },
 }
 
@@ -86,6 +98,13 @@ pub(crate) enum Stop {
         /// The hazard entity.
         id: EntityId,
     },
+    /// A switch; the caller toggles its group's gates after the plan returns.
+    Switch {
+        /// The switch entity.
+        id: EntityId,
+        /// The gate group it toggles.
+        group: u8,
+    },
 }
 
 /// The result of a legal move.
@@ -99,22 +118,26 @@ pub(crate) struct MovePlan {
     pub stop: Stop,
 }
 
-/// Resolves one move under the terrain rules.
+/// Resolves one move under the terrain and gate rules.
 ///
 /// The player enters `from + direction`, then keeps moving in the same direction while the
-/// displacement is sliding. Floor and one-way tiles are crossed; ice starts a slide; keys,
-/// doors, exits, portals and hazards stop it; walls, locked doors, wrong-way one-way tiles
-/// and the grid edge stop it *before* entry. The first target must be enterable, otherwise
-/// the move is rejected and `on_enter` is never called.
+/// displacement is sliding. Floor, one-way tiles and open gates are crossed; ice starts a
+/// slide; keys, doors, exits, portals, hazards and switches stop it; walls, locked doors,
+/// wrong-way one-way tiles, closed gates and the grid edge stop it *before* entry. The
+/// first target must be enterable, otherwise the move is rejected and `on_enter` is never
+/// called.
 ///
-/// `removed` treats one entity as absent, which is how verified repairs are evaluated.
-/// `on_enter` sees every entered cell in order; the analysis uses it to record the movement
-/// footprint without allocating a path vector per move.
+/// `gates` must be the gate state as of the start of the action; a press applied by the
+/// caller afterwards affects only later actions. `removed` treats one entity as absent,
+/// which is how verified repairs are evaluated. `on_enter` sees every entered cell in
+/// order; the analysis uses it to record the movement footprint without allocating a path
+/// vector per move.
 pub(crate) fn plan(
     board: &Board,
     from: Position,
     direction: Direction,
     inventory: KeySet,
+    gates: GateSet,
     removed: Option<EntityId>,
     mut on_enter: impl FnMut(Position),
 ) -> Result<MovePlan, MoveBlock> {
@@ -163,6 +186,16 @@ pub(crate) fn plan(
                     }
                     break;
                 }
+                EntityKind::Gate { group } if !gates.contains(group) => {
+                    if entered == 0 {
+                        return Err(MoveBlock::ClosedGate {
+                            target,
+                            gate: id,
+                            group,
+                        });
+                    }
+                    break;
+                }
                 _ => {}
             }
         }
@@ -195,6 +228,10 @@ pub(crate) fn plan(
                 id,
                 kind: EntityKind::Hazard,
             }) => Some(Stop::Hazard { id }),
+            Some(Occupant {
+                id,
+                kind: EntityKind::Switch { group },
+            }) => Some(Stop::Switch { id, group }),
             _ => None,
         };
         if let Some(stop) = stop {

@@ -763,6 +763,14 @@
       "meaning": "The move target is a door whose key the player does not hold."
     },
     {
+      "code": "gate_closed",
+      "meaning": "The move target is a gate whose group is closed."
+    },
+    {
+      "code": "invalid_gate_group",
+      "meaning": "A gate group id must be between 0 and 3."
+    },
+    {
       "code": "snapshot_not_found",
       "meaning": "No snapshot has this id in this session."
     },
@@ -1073,6 +1081,16 @@
           "type": "string",
           "const": "door_locked",
           "description": "The move target is a door whose key the player does not hold."
+        },
+        {
+          "type": "string",
+          "const": "gate_closed",
+          "description": "The move target is a gate whose group is closed."
+        },
+        {
+          "type": "string",
+          "const": "invalid_gate_group",
+          "description": "A gate group id must be between 0 and 3."
         },
         {
           "type": "string",
@@ -1491,6 +1509,50 @@
             "pair"
           ],
           "description": "Teleports the player to the other portal with the same `pair` id."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "switch"
+            },
+            "group": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 3,
+              "description": "The gate group this switch toggles."
+            }
+          },
+          "required": [
+            "type",
+            "group"
+          ],
+          "description": "Pressure plate. Entering it toggles its group between \"all gates closed\" and \"all\ngates open\"; the state persists until the next toggle."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "gate"
+            },
+            "group": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 3,
+              "description": "The gate group this gate belongs to."
+            }
+          },
+          "required": [
+            "type",
+            "group"
+          ],
+          "description": "Barrier that is passable while its group is open and impassable while it is closed."
         }
       ],
       "description": "What an entity is. Serialized with a `type` tag, e.g. `{\"type\": \"door\", \"color\": \"red\"}`."
@@ -1690,6 +1752,12 @@
           "minimum": 0,
           "description": "Number of distinct portal pair ids (0-9)."
         },
+        "max_gate_groups": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of distinct gate group ids (0-3)."
+        },
         "max_request_bytes": {
           "type": "integer",
           "format": "uint64",
@@ -1754,6 +1822,7 @@
         "max_keys_per_color",
         "key_color_count",
         "max_portal_pairs",
+        "max_gate_groups",
         "max_request_bytes",
         "max_request_id_chars",
         "max_batch_edits",
@@ -2589,6 +2658,31 @@
           "type": "string",
           "const": "portal_overpaired",
           "description": "A portal pair id occurs more than twice."
+        },
+        {
+          "type": "string",
+          "const": "player_on_gate",
+          "description": "The player spawn shares a cell with a gate."
+        },
+        {
+          "type": "string",
+          "const": "player_on_switch",
+          "description": "The player spawn shares a cell with a switch."
+        },
+        {
+          "type": "string",
+          "const": "gate_without_switch",
+          "description": "A gate group has no switch; its gates can never open."
+        },
+        {
+          "type": "string",
+          "const": "switch_without_gate",
+          "description": "A switch group has no gate; pressing it does nothing."
+        },
+        {
+          "type": "string",
+          "const": "analysis_limit",
+          "description": "The solvability search refused to run over the state cap; no proof was attempted."
         }
       ],
       "description": "Stable machine-readable issue identifiers."
@@ -3469,7 +3563,7 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "(cell, keys) states expanded."
+          "description": "(cell, keys, gates) states expanded."
         }
       },
       "required": [
@@ -3593,6 +3687,36 @@
           "type": "string",
           "const": "hazard",
           "description": "A hazard; entering it ends the episode as a failure."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "closed_gate": {
+              "type": "object",
+              "properties": {
+                "group": {
+                  "description": "The gate's group.",
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "has_switch": {
+                  "description": "Whether some switch in the scene toggles this group.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "group",
+                "has_switch"
+              ]
+            }
+          },
+          "required": [
+            "closed_gate"
+          ],
+          "additionalProperties": false,
+          "description": "A gate of a closed group that blocked at least one move attempted from a reachable\nstate. The fields name the group and whether the scene has any switch of it."
         }
       ],
       "description": "Why an entity blocks the target."
@@ -3762,6 +3886,13 @@
           },
           "description": "Key colors held."
         },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GateStatus"
+          },
+          "description": "Open/closed state of every gate group that appears in the scene, ascending by\ngroup id."
+        },
         "entities": {
           "type": "array",
           "items": {
@@ -3800,6 +3931,7 @@
         "grid",
         "player",
         "inventory",
+        "gates",
         "entities",
         "ascii",
         "legend",
@@ -3845,6 +3977,27 @@
         "complete"
       ],
       "description": "What the win condition currently requires."
+    },
+    "GateStatus": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "The group id (0-3)."
+        },
+        "open": {
+          "type": "boolean",
+          "description": "Whether the group's gates are currently open."
+        }
+      },
+      "required": [
+        "group",
+        "open"
+      ],
+      "description": "The open/closed state of one gate group present in the played scene."
     },
     "VisibleEntity": {
       "type": "object",
@@ -4222,6 +4375,37 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "switch_pressed"
+            },
+            "switch": {
+              "$ref": "#/$defs/EntityId",
+              "description": "The switch entity."
+            },
+            "group": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "The gate group it toggles."
+            },
+            "open": {
+              "type": "boolean",
+              "description": "Whether the group's gates are open after this press."
+            }
+          },
+          "required": [
+            "type",
+            "switch",
+            "group",
+            "open"
+          ],
+          "description": "The player entered a switch; the state is the gate state after the toggle."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "exit_reached"
             },
             "exit": {
@@ -4542,6 +4726,11 @@
           "type": "string",
           "const": "portal_used",
           "description": "`portal_used`."
+        },
+        {
+          "type": "string",
+          "const": "switch_pressed",
+          "description": "`switch_pressed`."
         },
         {
           "type": "string",

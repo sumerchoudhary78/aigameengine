@@ -149,6 +149,30 @@ fn entity_svg(kind: EntityKind, position: Position) -> String {
                 crate::layout::portal_glyph(pair)
             )
         }
+        // Pressure plate: a small plate circle with the group glyph on it.
+        EntityKind::Switch { group } => format!(
+            "<circle cx=\"{cx}\" cy=\"{cy}\" r=\"10\" fill=\"#cfd8dc\" stroke=\"#455a64\" stroke-width=\"2\"/>\n<text x=\"{cx}\" y=\"{}\" font-size=\"12\" fill=\"#263238\" text-anchor=\"middle\">{}</text>\n",
+            cy + 4,
+            crate::layout::switch_glyph(group)
+        ),
+        // Gate: a barred rectangle so it reads as passable-when-open.
+        EntityKind::Gate { group } => format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#b0bec5\" stroke=\"#37474f\" stroke-width=\"3\"/>\n<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#37474f\" stroke-width=\"2\"/>\n<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#37474f\" stroke-width=\"2\"/>\n<text x=\"{cx}\" y=\"{}\" font-size=\"12\" fill=\"#263238\" text-anchor=\"middle\">{}</text>\n",
+            x + 5,
+            y + 5,
+            CELL - 10,
+            CELL - 10,
+            x + 5,
+            y + 5,
+            x + 5,
+            y + CELL - 5,
+            x + CELL - 5,
+            y + 5,
+            x + CELL - 5,
+            y + CELL - 5,
+            cy + 4,
+            crate::layout::gate_glyph(group)
+        ),
     }
 }
 
@@ -235,5 +259,42 @@ mod tests {
         assert!(svg.contains(">!</text>"), "hazard glyph missing");
         assert!(svg.contains(">0</text>"), "portal 0 glyph missing");
         assert!(svg.contains(">1</text>"), "portal 1 glyph missing");
+    }
+
+    #[test]
+    fn renders_switches_gates_and_their_group_glyphs() {
+        let edits = [
+            EntityKind::Player,
+            EntityKind::Switch { group: 0 },
+            EntityKind::Switch { group: 3 },
+            EntityKind::Gate { group: 1 },
+            EntityKind::Gate { group: 2 },
+            EntityKind::Exit,
+        ]
+        .into_iter()
+        .zip(0..)
+        .map(|(kind, x)| SceneEdit::CreateEntity {
+            kind,
+            position: Position::new(x, 0),
+            label: None,
+        })
+        .collect::<Vec<_>>();
+        let scene = Scene::new(GridSize::new(6, 1), Rules::default())
+            .expect("valid")
+            .apply_edits(&edits)
+            .expect("valid")
+            .0;
+        let svg = scene_svg(&scene, "switches");
+        assert!(
+            svg.contains("<circle"),
+            "the switch renders as a plate circle"
+        );
+        assert!(svg.contains("<line"), "the gate renders as a barred gate");
+        for glyph in ["(", "-", "]", "}"] {
+            assert!(
+                svg.contains(&format!(">{glyph}</text>")),
+                "glyph {glyph} missing"
+            );
+        }
     }
 }

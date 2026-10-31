@@ -169,6 +169,8 @@ error_codes! {
     MoveBlocked => "move_blocked": "A wall occupies the move target.",
     OneWayBlocked => "one_way_blocked": "The move target is a one-way tile that allows entry only from another direction.",
     DoorLocked => "door_locked": "The move target is a door whose key the player does not hold.",
+    GateClosed => "gate_closed": "The move target is a gate whose group is closed.",
+    InvalidGateGroup => "invalid_gate_group": "A gate group id must be between 0 and 3.",
     SnapshotNotFound => "snapshot_not_found": "No snapshot has this id in this session.",
     LimitExceeded => "limit_exceeded": "A documented limit (batch size, snapshot count, ...) would be exceeded.",
     StorageError => "storage_error": "A file could not be read or written.",

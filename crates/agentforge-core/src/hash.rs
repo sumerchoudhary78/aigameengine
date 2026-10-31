@@ -26,10 +26,13 @@ use crate::rules::WinCondition;
 use crate::scene::Scene;
 
 /// Version of the canonical encoding. Recorded in replays; mismatches are rejected.
-pub const STATE_HASH_VERSION: u32 = 1;
+/// Version of the state-hash encoding. Bumped to 2 when gate state was added (the v1
+/// encoding |agentforge.state.v1| has no gates byte, so v1 hashes cannot be verified
+/// under v2 and are rejected explicitly by the replay verifier).
+pub const STATE_HASH_VERSION: u32 = 2;
 
 const SCENE_DOMAIN: &str = "agentforge.scene.v1";
-const STATE_DOMAIN: &str = "agentforge.state.v1";
+const STATE_DOMAIN: &str = "agentforge.state.v2";
 const RECORDING_DOMAIN: &str = "agentforge.recording.v1";
 
 /// A SHA-256 digest of a canonical encoding, written as `sha256:<64 lowercase hex>`.
@@ -204,18 +207,22 @@ const fn kind_code(kind: EntityKind) -> u8 {
         EntityKind::OneWay { .. } => 7,
         EntityKind::Hazard => 8,
         EntityKind::Portal { .. } => 9,
+        EntityKind::Switch { .. } => 10,
+        EntityKind::Gate { .. } => 11,
     }
 }
 
-/// Kind-specific attribute: color, one-way direction or portal pair.
+/// Kind-specific attribute: color, one-way direction, portal pair or gate group.
 ///
 /// For keys and doors this is `1 + color index`, exactly the old color byte, so existing
-/// scene digests stay unchanged.
+/// scene digests stay unchanged; for switches and gates it is `1 + gate group`, the same
+/// strict extension.
 const fn attribute_code(kind: EntityKind) -> u8 {
     match kind {
         EntityKind::Key { color } | EntityKind::Door { color } => color.index() + 1,
         EntityKind::OneWay { direction } => direction.index() + 1,
         EntityKind::Portal { pair } => pair + 1,
+        EntityKind::Switch { group } | EntityKind::Gate { group } => group + 1,
         _ => 0,
     }
 }
@@ -245,8 +252,9 @@ const fn outcome_code(outcome: Outcome) -> (u8, u32) {
 /// Layout: `str("agentforge.scene.v1")`, `u32 width`, `u32 height`, `u32 max_ticks`,
 /// `u8 win_condition`, `u32 next_entity_id`, `u32 entity_count`, then per entity in
 /// ascending id order: `u32 id`, `u8 kind` (1 player, 2 wall, 3 key, 4 door, 5 exit,
-/// 6 ice, 7 one-way, 8 hazard, 9 portal), `u8 attribute` (0 none; key/door 1 + color index;
-/// one-way 1 + direction index; portal 1 + pair), `i32 x`, `i32 y`.
+/// 6 ice, 7 one-way, 8 hazard, 9 portal, 10 switch, 11 gate), `u8 attribute` (0 none;
+/// key/door 1 + color index; one-way 1 + direction index; portal 1 + pair; switch/gate
+/// 1 + gate group), `i32 x`, `i32 y`.
 pub fn scene_digest(scene: &Scene) -> StateHash {
     let mut encoder = CanonicalEncoder::new(SCENE_DOMAIN);
     let size = scene.size();
@@ -270,10 +278,10 @@ pub fn scene_digest(scene: &Scene) -> StateHash {
 
 /// Hash of the full simulation state of an episode at one tick.
 ///
-/// Layout: `str("agentforge.state.v1")`, the 32 raw bytes of the scene digest, `u32 tick`,
+/// Layout: `str("agentforge.state.v2")`, the 32 raw bytes of the scene digest, `u32 tick`,
 /// `i32 player_x`, `i32 player_y`, `u8 inventory` (bit i = `KeyColor::ALL[i]`),
-/// `u8 outcome` (0 in progress, 1 won, 2 failed: max ticks, 3 failed: forfeited),
-/// `u32 outcome_tick` (0 while in progress).
+/// `u8 gates` (bit i = gate group i open), `u8 outcome` (0 in progress, 1 won, 2 failed:
+/// max ticks, 3 failed: forfeited), `u32 outcome_tick` (0 while in progress).
 ///
 /// Because each key color appears at most once per scene, the inventory also determines
 /// which key entities have been collected, so no separate collected-set is encoded.
@@ -284,6 +292,7 @@ pub fn state_hash(scene_digest: &StateHash, state: &EpisodeState) -> StateHash {
     encoder.i32(state.player.x);
     encoder.i32(state.player.y);
     encoder.u8(state.inventory.bits());
+    encoder.u8(state.gates.bits());
     let (code, tick) = outcome_code(state.outcome);
     encoder.u8(code);
     encoder.u32(tick);
@@ -334,7 +343,7 @@ pub fn recording_fingerprint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{KeyColor, KeySet};
+    use crate::entity::{GateSet, KeyColor, KeySet};
     use crate::geometry::{GridSize, Position};
     use crate::rules::Rules;
     use crate::scene::SceneEdit;
@@ -385,11 +394,12 @@ mod tests {
             tick: 2,
             player: Position::new(2, 0),
             inventory: [KeyColor::Blue].into_iter().collect::<KeySet>(),
+            gates: GateSet::EMPTY,
             outcome: Outcome::Won { tick: 2 },
         };
         assert_eq!(
             state_hash(&digest, &state).to_string(),
-            "sha256:0f318b596859364eb14c014f849b6de038a46144b7452c3fce4c5b945b8e1c3e",
+            "sha256:85fc962b7006195a9cc54ba0583e8b649614035e909eddcc239eb8ed5585d672",
             "state hash changed"
         );
     }
